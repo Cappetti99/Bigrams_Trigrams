@@ -1,0 +1,52 @@
+# ====================
+# Build e IDE
+# ====================
+
+# Cartella di build di CLion
+cmake-build-debug/
+cmake-build-release/
+cmake-build-*
+
+# File generati da CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cbp
+*.layout
+*.log
+*.user
+*.user.*.xml
+*.sublime-workspace
+*.sublime-project
+
+# ====================
+# File temporanei
+# ====================
+*.o
+*.obj
+*.exe
+*.out
+*.so
+*.dll
+*.dylib
+*.pdb
+*.ipch
+*.iobj
+*.idb
+
+# ====================
+# File generati dall’esecuzione
+# ====================
+*.csv
+*.txt~   # eventuali file temporanei di testo
+
+# ====================
+# MacOS
+# ====================
+.DS_Store
+
+# ====================
+# Linux
+# ====================
+*~
