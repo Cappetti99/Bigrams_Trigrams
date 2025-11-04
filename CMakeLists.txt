@@ -41,7 +41,8 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 
 # 🔹 File sorgenti reali
 set(SOURCE_FILES
-        bigram.cpp
+        bigram_seq.cpp
+        book_gutenberg/bigram_par.cpp
 )
 
 # Eseguibile principale
