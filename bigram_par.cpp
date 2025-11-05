@@ -1,5 +1,5 @@
 //
-// Lorenzo Cappetti, 2025 - Parallel Version with Thread-Safe Hash Table
+// Lorenzo Cappetti, 2025 - OpenMP Version (Final Clean)
 //
 
 #include <iostream>
@@ -13,44 +13,63 @@
 #include <filesystem>
 #include <regex>
 #include <chrono>
-#include <thread>
-#include <mutex>
-#include <atomic>
+#include <omp.h>
+#include <iomanip>
+#include <cmath>
 
 namespace fs = std::filesystem;
+
+static void ensure_directory_exists(const std::string& dir) {
+    if (!fs::exists(dir)) {
+        fs::create_directories(dir);
+    }
+}
+
+// ==================== PERFORMANCE PROFILER ====================
+class Profiler {
+    std::chrono::high_resolution_clock::time_point start;
+    std::string name;
+public:
+    Profiler(const std::string& n) : name(n) {
+        start = std::chrono::high_resolution_clock::now();
+    }
+    ~Profiler() {
+        // Profiling silenzioso
+    }
+};
 
 // ==================== TEXT CLEANER ====================
 class TextCleaner {
 public:
     static std::string remove_gutenberg_header(const std::string& text) {
-        std::string result = text;
-        size_t start_pos = result.find("*** START OF");
+        size_t start_pos = text.find("*** START OF");
         if (start_pos != std::string::npos) {
-            size_t end_of_line = result.find("***", start_pos + 12);
+            size_t end_of_line = text.find("***", start_pos + 12);
             if (end_of_line != std::string::npos) {
-                result = result.substr(end_of_line + 3);
+                return text.substr(end_of_line + 3);
             }
         }
-        size_t contents_pos = result.find("Contents");
-        if (contents_pos != std::string::npos) {
-            std::regex chapter_pattern(R"(CHAPTER\s+[IVX]+\.)", std::regex::icase);
-            std::smatch match;
-            std::string temp = result.substr(contents_pos);
-            if (std::regex_search(temp, match, chapter_pattern)) {
-                result = result.substr(0, contents_pos) + temp.substr(match.position());
-            }
-        }
-        return result;
+        return text;
     }
 
     static std::string remove_gutenberg_footer(const std::string& text) {
-        std::regex end_pattern(R"(\*\*\* END OF.*)", std::regex::icase);
-        return std::regex_replace(text, end_pattern, "");
+        size_t end_pos = text.find("*** END OF");
+        if (end_pos != std::string::npos) {
+            return text.substr(0, end_pos);
+        }
+        return text;
     }
 
     static std::string clean_text(const std::string& text) {
         std::string cleaned = remove_gutenberg_header(text);
         cleaned = remove_gutenberg_footer(cleaned);
+        size_t contents_pos = cleaned.find("Contents");
+        if (contents_pos != std::string::npos && contents_pos < 5000) {
+            size_t chapter_pos = cleaned.find("CHAPTER", contents_pos);
+            if (chapter_pos != std::string::npos) {
+                cleaned = cleaned.substr(0, contents_pos) + cleaned.substr(chapter_pos);
+            }
+        }
         return cleaned;
     }
 };
@@ -58,31 +77,40 @@ public:
 // ==================== TOKENIZER ====================
 class Tokenizer {
 private:
-    static std::string process_utf8_char(const unsigned char* bytes, size_t& skip) {
+    static const unsigned char* get_to_lower() {
+        static unsigned char table[256];
+        static bool initialized = false;
+        if (!initialized) {
+            for (int i = 0; i < 256; i++) {
+                table[i] = (i >= 'A' && i <= 'Z') ? i + 32 : i;
+            }
+            initialized = true;
+        }
+        return table;
+    }
+
+    static inline std::string process_utf8_char(const unsigned char* bytes, size_t& skip) {
         skip = 0;
         if ((bytes[0] & 0xE0) == 0xC0 && bytes[1]) {
             skip = 2;
             unsigned char first = bytes[0];
             unsigned char second = bytes[1];
-            if ((first == 0xC3 && second >= 0x80 && second <= 0x85) ||
-                (first == 0xC3 && second >= 0xA0 && second <= 0xA5)) return "a";
-            if ((first == 0xC3 && second >= 0x88 && second <= 0x8B) ||
-                (first == 0xC3 && second >= 0xA8 && second <= 0xAB)) return "e";
-            if ((first == 0xC3 && second >= 0x8C && second <= 0x8F) ||
-                (first == 0xC3 && second >= 0xAC && second <= 0xAF)) return "i";
-            if ((first == 0xC3 && second >= 0x92 && second <= 0x96) ||
-                (first == 0xC3 && second >= 0xB2 && second <= 0xB6)) return "o";
-            if ((first == 0xC3 && second >= 0x99 && second <= 0x9C) ||
-                (first == 0xC3 && second >= 0xB9 && second <= 0xBC)) return "u";
-            if ((first == 0xC3 && second == 0x91) || (first == 0xC3 && second == 0xB1)) return "n";
-            if ((first == 0xC3 && second == 0x87) || (first == 0xC3 && second == 0xA7)) return "c";
-            if ((first == 0xC3 && (second == 0x9D || second == 0xBD || second == 0x9F || second == 0xBF))) return "y";
+            if (first == 0xC3) {
+                if ((second >= 0x80 && second <= 0x85) || (second >= 0xA0 && second <= 0xA5)) return "a";
+                if ((second >= 0x88 && second <= 0x8B) || (second >= 0xA8 && second <= 0xAB)) return "e";
+                if ((second >= 0x8C && second <= 0x8F) || (second >= 0xAC && second <= 0xAF)) return "i";
+                if ((second >= 0x92 && second <= 0x96) || (second >= 0xB2 && second <= 0xB6)) return "o";
+                if ((second >= 0x99 && second <= 0x9C) || (second >= 0xB9 && second <= 0xBC)) return "u";
+                if (second == 0x91 || second == 0xB1) return "n";
+                if (second == 0x87 || second == 0xA7) return "c";
+                if (second == 0x9D || second == 0xBD || second == 0x9F || second == 0xBF) return "y";
+            }
             return "";
         }
         if ((bytes[0] & 0xF0) == 0xE0 && bytes[1] && bytes[2]) {
             skip = 3;
-            if (bytes[0] == 0xE2 && bytes[1] == 0x80 &&
-                (bytes[2] >= 0x98 && bytes[2] <= 0x9F)) return " ";
+            if (bytes[0] == 0xE2 && bytes[1] == 0x80 && (bytes[2] >= 0x98 && bytes[2] <= 0x9F))
+                return " ";
             return "";
         }
         if ((bytes[0] & 0xF8) == 0xF0 && bytes[1] && bytes[2] && bytes[3]) {
@@ -96,6 +124,7 @@ public:
     static std::string normalize(const std::string& text, bool remove_punct = false) {
         std::string result;
         result.reserve(text.size());
+        const unsigned char* to_lower = get_to_lower();
         for (size_t i = 0; i < text.size(); ++i) {
             unsigned char c = static_cast<unsigned char>(text[i]);
             if (c >= 0x80) {
@@ -113,30 +142,33 @@ public:
                 result += ' ';
                 continue;
             }
-            if (std::isalpha(c) || std::isspace(c))
-                result += std::tolower(c);
+            if (std::isalpha(c)) {
+                result += to_lower[c];
+            } else if (std::isspace(c)) {
+                result += ' ';
+            }
         }
         return result;
     }
 
-    static std::vector<std::string> tokenize_words(const std::string& text) {
-        std::vector<std::string> tokens;
+    static void tokenize_words(const std::string& text, std::vector<std::string>& tokens) {
+        tokens.clear();
+        tokens.reserve(text.size() / 6);
         std::istringstream iss(text);
         std::string word;
         while (iss >> word) {
-            if (!word.empty()) tokens.push_back(word);
+            if (!word.empty()) tokens.push_back(std::move(word));
         }
-        return tokens;
     }
 
-    static std::vector<char> tokenize_chars(const std::string& text) {
-        std::vector<char> chars;
+    static void tokenize_chars(const std::string& text, std::vector<char>& chars) {
+        chars.clear();
+        chars.reserve(text.size());
         for (char c : text) {
             if (!std::isspace(static_cast<unsigned char>(c))) {
                 chars.push_back(c);
             }
         }
-        return chars;
     }
 };
 
@@ -144,224 +176,222 @@ public:
 template<typename T>
 class NgramExtractor {
 public:
-    static std::vector<std::vector<T>> extract(const std::vector<T>& tokens, size_t n) {
-        std::vector<std::vector<T>> ngrams;
-        if (tokens.size() < n) return ngrams;
-        for (size_t i = 0; i <= tokens.size() - n; ++i) {
-            ngrams.emplace_back(tokens.begin() + i, tokens.begin() + i + n);
-        }
-        return ngrams;
-    }
-
-    static std::string ngram_to_string(const std::vector<T>& ngram) {
+    static inline void extract_and_count(
+        const std::vector<T>& tokens,
+        size_t n,
+        std::unordered_map<std::string, size_t>& freq_map
+    ) {
+        if (tokens.size() < n) return;
+        freq_map.reserve(freq_map.size() + tokens.size() / 2);
         std::ostringstream oss;
-        for (size_t i = 0; i < ngram.size(); ++i) {
-            if (i > 0) oss << " ";
-            oss << ngram[i];
+        for (size_t i = 0; i <= tokens.size() - n; ++i) {
+            oss.str("");
+            oss.clear();
+            oss << tokens[i];
+            for (size_t j = 1; j < n; ++j) {
+                oss << ' ' << tokens[i + j];
+            }
+            freq_map[oss.str()]++;
         }
-        return oss.str();
     }
 };
 
-// ==================== THREAD-SAFE FREQUENCY COUNTER ====================
-class ThreadSafeFrequencyCounter {
+// ==================== FREQUENCY COUNTER ====================
+class FrequencyCounter {
 private:
     std::unordered_map<std::string, size_t> frequencies;
-    mutable std::mutex mtx;
 
 public:
-    // Aggiunge un n-gram in modo thread-safe
-    void add_ngram(const std::string& ngram) {
-        std::lock_guard<std::mutex> lock(mtx);
-        frequencies[ngram]++;
-    }
-
-    // Unisce frequenze locali in batch (più efficiente)
-    void merge_local(const std::unordered_map<std::string, size_t>& local_freqs) {
-        std::lock_guard<std::mutex> lock(mtx);
-        for (const auto& [ngram, count] : local_freqs) {
-            frequencies[ngram] += count;
+    void merge(const std::unordered_map<std::string, size_t>& other) {
+        if (frequencies.empty()) {
+            frequencies = other;
+        } else {
+            frequencies.reserve(frequencies.size() + other.size());
+            for (const auto& [ngram, count] : other) {
+                frequencies[ngram] += count;
+            }
         }
     }
 
     std::vector<std::pair<std::string, size_t>> get_top_n(size_t n) const {
-        std::lock_guard<std::mutex> lock(mtx);
         std::vector<std::pair<std::string, size_t>> sorted(frequencies.begin(), frequencies.end());
-        std::partial_sort(
-            sorted.begin(),
-            sorted.begin() + std::min(n, sorted.size()),
-            sorted.end(),
-            [](const auto& a, const auto& b) { return a.second > b.second; }
-        );
-        sorted.resize(std::min(n, sorted.size()));
+        if (n < sorted.size()) {
+            std::partial_sort(
+                sorted.begin(),
+                sorted.begin() + n,
+                sorted.end(),
+                [](const auto& a, const auto& b) { return a.second > b.second; }
+            );
+            sorted.resize(n);
+        } else {
+            std::sort(sorted.begin(), sorted.end(),
+                [](const auto& a, const auto& b) { return a.second > b.second; });
+        }
         return sorted;
     }
 
-    size_t total_unique() const {
-        std::lock_guard<std::mutex> lock(mtx);
-        return frequencies.size();
-    }
+    size_t total_unique() const { return frequencies.size(); }
 
     size_t total_count() const {
-        std::lock_guard<std::mutex> lock(mtx);
         size_t total = 0;
         for (const auto& [_, count] : frequencies) total += count;
         return total;
     }
 
-    const std::unordered_map<std::string, size_t> get_frequencies_copy() const {
-        std::lock_guard<std::mutex> lock(mtx);
+    const std::unordered_map<std::string, size_t>& get_frequencies() const {
         return frequencies;
     }
 };
 
-// ==================== PARALLEL PROCESSOR ====================
-class ParallelProcessor {
+// ==================== OPENMP PROCESSOR ====================
+class OpenMPProcessor {
 public:
-    // Processa un singolo testo e accumula in una hash table locale
-    static void process_text_local(
+    static void process_text_optimized(
         const std::string& text,
-        size_t n,
-        bool use_words,
-        std::unordered_map<std::string, size_t>& local_counter
+        std::unordered_map<std::string, size_t>& wb,
+        std::unordered_map<std::string, size_t>& wt,
+        std::unordered_map<std::string, size_t>& cb,
+        std::unordered_map<std::string, size_t>& ct
     ) {
         std::string normalized = Tokenizer::normalize(text, true);
 
-        if (use_words) {
-            auto tokens = Tokenizer::tokenize_words(normalized);
-            auto ngrams = NgramExtractor<std::string>::extract(tokens, n);
-            for (const auto& ng : ngrams) {
-                local_counter[NgramExtractor<std::string>::ngram_to_string(ng)]++;
-            }
-        } else {
-            auto tokens = Tokenizer::tokenize_chars(normalized);
-            auto ngrams = NgramExtractor<char>::extract(tokens, n);
-            for (const auto& ng : ngrams) {
-                local_counter[NgramExtractor<char>::ngram_to_string(ng)]++;
-            }
-        }
+        std::vector<std::string> words;
+        Tokenizer::tokenize_words(normalized, words);
+        NgramExtractor<std::string>::extract_and_count(words, 2, wb);
+        NgramExtractor<std::string>::extract_and_count(words, 3, wt);
+
+        std::vector<char> chars;
+        Tokenizer::tokenize_chars(normalized, chars);
+        NgramExtractor<char>::extract_and_count(chars, 2, cb);
+        NgramExtractor<char>::extract_and_count(chars, 3, ct);
     }
 
-    // Thread worker: processa un batch di libri
-    static void worker_thread(
-        const std::vector<std::string>& book_files,
-        size_t start_idx,
-        size_t end_idx,
-        ThreadSafeFrequencyCounter& word_bigrams,
-        ThreadSafeFrequencyCounter& word_trigrams,
-        ThreadSafeFrequencyCounter& char_bigrams,
-        ThreadSafeFrequencyCounter& char_trigrams,
-        std::atomic<size_t>& processed_count
+    static void parallel_merge(
+        std::vector<std::unordered_map<std::string, size_t>>& thread_maps,
+        FrequencyCounter& result,
+        const std::string& type
     ) {
-        for (size_t i = start_idx; i < end_idx; ++i) {
-            const auto& filepath = book_files[i];
-
-            std::ifstream file(filepath);
-            if (!file) {
-                std::cerr << "Impossibile aprire: " << filepath << "\n";
-                continue;
+        Profiler prof("Merge " + type);
+        int num_maps = thread_maps.size();
+        while (num_maps > 1) {
+            int next_num = (num_maps + 1) / 2;
+            #pragma omp parallel for schedule(dynamic)
+            for (int i = 0; i < num_maps / 2; ++i) {
+                auto& map1 = thread_maps[i];
+                auto& map2 = thread_maps[num_maps - 1 - i];
+                map1.reserve(map1.size() + map2.size());
+                for (const auto& [key, val] : map2) {
+                    map1[key] += val;
+                }
+                map2.clear();
             }
-
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            std::string text = buffer.str();
-            text = TextCleaner::clean_text(text);
-
-            // Hash table locali per ridurre contention sui lock
-            std::unordered_map<std::string, size_t> local_wb, local_wt, local_cb, local_ct;
-
-            process_text_local(text, 2, true, local_wb);
-            process_text_local(text, 3, true, local_wt);
-            process_text_local(text, 2, false, local_cb);
-            process_text_local(text, 3, false, local_ct);
-
-            // Merge in batch alle strutture globali
-            word_bigrams.merge_local(local_wb);
-            word_trigrams.merge_local(local_wt);
-            char_bigrams.merge_local(local_cb);
-            char_trigrams.merge_local(local_ct);
-
-            processed_count++;
+            num_maps = next_num;
         }
+        result.merge(thread_maps[0]);
     }
 
-    // Avvia l'elaborazione parallela
     static void process_parallel(
         const std::vector<std::string>& book_files,
-        ThreadSafeFrequencyCounter& word_bigrams,
-        ThreadSafeFrequencyCounter& word_trigrams,
-        ThreadSafeFrequencyCounter& char_bigrams,
-        ThreadSafeFrequencyCounter& char_trigrams,
-        size_t num_threads = 0
+        FrequencyCounter& word_bigrams,
+        FrequencyCounter& word_trigrams,
+        FrequencyCounter& char_bigrams,
+        FrequencyCounter& char_trigrams,
+        int num_threads = 0
     ) {
         if (num_threads == 0)
-            num_threads = std::thread::hardware_concurrency();
-        if (num_threads == 0) num_threads = 4;
+            num_threads = omp_get_max_threads();
 
-        std::cout << "Usando " << num_threads << " threads\n\n";
+        omp_set_num_threads(num_threads);
+        std::cout << "Usando " << num_threads << " threads\n";
 
-        std::atomic<size_t> processed_count{0};
-        std::vector<std::thread> threads;
+        int total_books = book_files.size();
+        size_t total_bytes = 0;
 
-        size_t books_per_thread = book_files.size() / num_threads;
-        size_t remainder = book_files.size() % num_threads;
+        std::vector<std::unordered_map<std::string, size_t>> thread_wb(num_threads);
+        std::vector<std::unordered_map<std::string, size_t>> thread_wt(num_threads);
+        std::vector<std::unordered_map<std::string, size_t>> thread_cb(num_threads);
+        std::vector<std::unordered_map<std::string, size_t>> thread_ct(num_threads);
 
-        size_t start = 0;
-        for (size_t t = 0; t < num_threads; ++t) {
-            size_t end = start + books_per_thread + (t < remainder ? 1 : 0);
-            if (start >= book_files.size()) break;
+        auto processing_start = std::chrono::high_resolution_clock::now();
 
-            threads.emplace_back(
-                worker_thread,
-                std::cref(book_files),
-                start, end,
-                std::ref(word_bigrams),
-                std::ref(word_trigrams),
-                std::ref(char_bigrams),
-                std::ref(char_trigrams),
-                std::ref(processed_count)
-            );
-            start = end;
+        #pragma omp parallel reduction(+:total_bytes)
+        {
+            int tid = omp_get_thread_num();
+            auto& my_wb = thread_wb[tid];
+            auto& my_wt = thread_wt[tid];
+            auto& my_cb = thread_cb[tid];
+            auto& my_ct = thread_ct[tid];
+
+            my_wb.reserve(100000);
+            my_wt.reserve(200000);
+            my_cb.reserve(50000);
+            my_ct.reserve(100000);
+
+            #pragma omp for schedule(dynamic, 1) nowait
+            for (int i = 0; i < total_books; ++i) {
+                const auto& filepath = book_files[i];
+                std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+                if (!file) {
+                    #pragma omp critical
+                    std::cerr << "❌ Impossibile aprire: " << filepath << "\n";
+                    continue;
+                }
+
+                std::streamsize size = file.tellg();
+                file.seekg(0, std::ios::beg);
+                std::string text(size, '\0');
+                if (!file.read(&text[0], size)) {
+                    continue;
+                }
+
+                total_bytes += size;
+                text = TextCleaner::clean_text(text);
+                process_text_optimized(text, my_wb, my_wt, my_cb, my_ct);
+            }
         }
 
-        // Progress monitor
-        std::thread monitor([&]() {
-            while (processed_count < book_files.size()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                std::cout << "\rProcessati: " << processed_count << "/"
-                          << book_files.size() << " libri" << std::flush;
-            }
-            std::cout << "\rProcessati: " << book_files.size() << "/"
-                      << book_files.size() << " libri\n";
-        });
+        auto processing_end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> proc_time = processing_end - processing_start;
 
-        for (auto& t : threads) t.join();
-        monitor.join();
+        std::cout << "✓ Processing completato in " << std::fixed << std::setprecision(2)
+                  << proc_time.count() << "s\n\n";
+
+        parallel_merge(thread_wb, word_bigrams, "Word Bigrams");
+        parallel_merge(thread_wt, word_trigrams, "Word Trigrams");
+        parallel_merge(thread_cb, char_bigrams, "Char Bigrams");
+        parallel_merge(thread_ct, char_trigrams, "Char Trigrams");
     }
 };
 
 // ==================== STATISTICS GENERATOR ====================
 class StatisticsGenerator {
 public:
-    static void print_statistics(const ThreadSafeFrequencyCounter& counter,
+    static void print_statistics(const FrequencyCounter& counter,
                                 const std::string& type,
                                 size_t n,
                                 size_t top_n = 20) {
-        std::cout << "\n========== " << type << " (n=" << n << ") ==========\n";
-        std::cout << "Total unique " << type << ": " << counter.total_unique() << "\n";
-        std::cout << "Total count: " << counter.total_count() << "\n\n";
+        std::cout << "\n╔════════════════════════════════════════════════════╗\n";
+        std::cout << "║ " << std::left << std::setw(50) << (type + " (n=" + std::to_string(n) + ")") << " ║\n";
+        std::cout << "╠════════════════════════════════════════════════════╣\n";
+        std::cout << "║ Total unique: " << std::setw(35) << counter.total_unique() << " ║\n";
+        std::cout << "║ Total count:  " << std::setw(35) << counter.total_count() << " ║\n";
+        std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+
         std::cout << "Top " << top_n << " most frequent:\n";
         auto top = counter.get_top_n(top_n);
         for (size_t i = 0; i < top.size(); ++i) {
             auto [ngram, freq] = top[i];
-            std::cout << (i + 1) << ". \"" << ngram << "\" - " << freq << " occurrences\n";
+            std::cout << std::setw(3) << (i + 1) << ". "
+                      << std::left << std::setw(30) << ("\"" + ngram + "\"")
+                      << std::right << std::setw(10) << freq << " occurrences\n";
         }
     }
 
-    static void save_to_file(const ThreadSafeFrequencyCounter& counter, const std::string& filename) {
+    static void save_to_file(const FrequencyCounter& counter, const std::string& filename) {
+        Profiler prof("Save " + filename);
         std::ofstream out(filename);
         if (!out) {
-            std::cerr << "Errore nell'aprire il file: " << filename << "\n";
+            std::cerr << "❌ Errore nell'aprire il file: " << filename << "\n";
             return;
         }
         auto top = counter.get_top_n(counter.total_unique());
@@ -369,19 +399,21 @@ public:
         for (const auto& [ngram, freq] : top) {
             out << "\"" << ngram << "\"," << freq << "\n";
         }
-        std::cout << "Statistiche salvate in: " << filename << "\n";
     }
 };
 
 // ==================== MAIN ====================
 int main() {
-    std::cout << "Parallel N-gram Analyzer with Thread-Safe Hash Tables\n";
-    std::cout << "======================================================\n\n";
+    std::cout << "\n";
+    std::cout << "╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║          OpenMP N-gram Analyzer (Parallel)            ║\n";
+    std::cout << "║             Lorenzo Cappetti, 2025                    ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
 
     std::string folder_path = "/Users/lorenzocappetti/CLionProjects/Bigrams_Trigrams/book_gutenberg";
 
     if (!fs::exists(folder_path) || !fs::is_directory(folder_path)) {
-        std::cerr << "Errore: cartella '" << folder_path << "' non trovata!\n";
+        std::cerr << "❌ Errore: cartella '" << folder_path << "' non trovata!\n";
         return 1;
     }
 
@@ -392,17 +424,17 @@ int main() {
     }
 
     if (book_files.empty()) {
-        std::cerr << "Nessun file .txt trovato nella cartella!\n";
+        std::cerr << "❌ Nessun file .txt trovato nella cartella!\n";
         return 1;
     }
 
-    std::cout << "Trovati " << book_files.size() << " libri da processare\n";
+    std::cout << "📚 Trovati " << book_files.size() << " libri da processare\n\n";
 
-    ThreadSafeFrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
+    FrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    ParallelProcessor::process_parallel(
+    OpenMPProcessor::process_parallel(
         book_files,
         word_bigrams, word_trigrams,
         char_bigrams, char_trigrams
@@ -416,12 +448,22 @@ int main() {
     StatisticsGenerator::print_statistics(char_bigrams, "Char Bigrams", 2);
     StatisticsGenerator::print_statistics(char_trigrams, "Char Trigrams", 3);
 
-    std::cout << "\nTempo totale di esecuzione: " << elapsed.count() << " secondi\n";
+    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║ TEMPO TOTALE (parallel): " << std::setw(28) << std::fixed
+              << std::setprecision(2) << elapsed.count() << "s ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
 
-    StatisticsGenerator::save_to_file(word_bigrams, "word_bigrams.csv");
-    StatisticsGenerator::save_to_file(word_trigrams, "word_trigrams.csv");
-    StatisticsGenerator::save_to_file(char_bigrams, "char_bigrams.csv");
-    StatisticsGenerator::save_to_file(char_trigrams, "char_trigrams.csv");
+    // Output in cartella separata: output_parallel
+    std::string output_dir = "output_parallel";
+    ensure_directory_exists(output_dir);
+
+    std::cout << "\nSalvando risultati in " << output_dir << "/...\n";
+    StatisticsGenerator::save_to_file(word_bigrams, output_dir + "/word_bigrams_par.csv");
+    StatisticsGenerator::save_to_file(word_trigrams, output_dir + "/word_trigrams_par.csv");
+    StatisticsGenerator::save_to_file(char_bigrams, output_dir + "/char_bigrams_par.csv");
+    StatisticsGenerator::save_to_file(char_trigrams, output_dir + "/char_trigrams_par.csv");
+
+    std::cout << "\n✓ Analisi completata con successo!\n";
 
     return 0;
 }

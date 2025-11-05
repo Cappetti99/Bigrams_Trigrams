@@ -45,13 +45,17 @@ add_executable(bigram_seq bigram_seq.cpp)
 # 🔹 Eseguibile per bigram_par
 add_executable(bigram_par bigram_par.cpp)
 
+# 🔹 Eseguibile per correctness_check
+add_executable(correctness_check correctness_check.cpp)
+
 # Link delle librerie necessarie per bigram_seq
 if(APPLE)
     target_link_libraries(bigram_seq omp "-pthread")
+    target_link_libraries(bigram_par omp "-pthread")
+    # correctness_check non ha bisogno di OpenMP
 else()
     target_link_libraries(bigram_seq OpenMP::OpenMP_CXX)
-    find_package(Threads REQUIRED)
-    target_link_libraries(bigram_seq Threads::Threads)
+    target_link_libraries(bigram_par OpenMP::OpenMP_CXX)
 endif()
 
 # Link delle librerie necessarie per bigram_par

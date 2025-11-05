@@ -1,0 +1,336 @@
+//
+// Lorenzo Cappetti, 2025 - Correctness Checker
+// Confronta i risultati tra versione sequenziale e parallela
+//
+
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <iomanip>
+#include <cmath>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+// ==================== CSV READER ====================
+class CSVReader {
+public:
+    static std::unordered_map<std::string, size_t> read_csv(const std::string& filename) {
+        std::unordered_map<std::string, size_t> result;
+        std::ifstream file(filename);
+
+        if (!file) {
+            std::cerr << "❌ File non trovato: " << filename << "\n";
+            return result;
+        }
+
+        std::string line;
+        // Salta header
+        std::getline(file, line);
+
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+
+            // Parse CSV: "ngram",frequency
+            size_t first_quote = line.find('"');
+            size_t second_quote = line.find('"', first_quote + 1);
+            size_t comma = line.find(',', second_quote);
+
+            if (first_quote != std::string::npos &&
+                second_quote != std::string::npos &&
+                comma != std::string::npos) {
+
+                std::string ngram = line.substr(first_quote + 1, second_quote - first_quote - 1);
+                std::string freq_str = line.substr(comma + 1);
+
+                try {
+                    size_t frequency = std::stoull(freq_str);
+                    result[ngram] = frequency;
+                } catch (...) {
+                    std::cerr << "⚠️  Errore parsing linea: " << line << "\n";
+                }
+            }
+        }
+
+        return result;
+    }
+};
+
+// ==================== CORRECTNESS ANALYZER ====================
+class CorrectnessAnalyzer {
+private:
+    struct ComparisonResult {
+        std::string name;
+        size_t seq_unique;
+        size_t par_unique;
+        size_t seq_total;
+        size_t par_total;
+        size_t matches;
+        size_t freq_mismatches;
+        size_t only_in_seq;
+        size_t only_in_par;
+        bool is_correct;
+        double accuracy_percent;
+    };
+
+    static ComparisonResult compare_maps(
+        const std::unordered_map<std::string, size_t>& seq_map,
+        const std::unordered_map<std::string, size_t>& par_map,
+        const std::string& name,
+        bool verbose = false
+    ) {
+        ComparisonResult result;
+        result.name = name;
+        result.seq_unique = seq_map.size();
+        result.par_unique = par_map.size();
+
+        // Calcola totali
+        result.seq_total = 0;
+        for (const auto& [_, count] : seq_map) result.seq_total += count;
+
+        result.par_total = 0;
+        for (const auto& [_, count] : par_map) result.par_total += count;
+
+        result.matches = 0;
+        result.freq_mismatches = 0;
+        result.only_in_seq = 0;
+        result.only_in_par = 0;
+
+        std::vector<std::string> mismatch_examples;
+        std::vector<std::string> seq_only_examples;
+        std::vector<std::string> par_only_examples;
+
+        // Controlla ngram in seq
+        for (const auto& [key, val_seq] : seq_map) {
+            auto it = par_map.find(key);
+            if (it == par_map.end()) {
+                result.only_in_seq++;
+                if (verbose && seq_only_examples.size() < 5) {
+                    seq_only_examples.push_back("\"" + key + "\" (freq=" + std::to_string(val_seq) + ")");
+                }
+            } else if (it->second != val_seq) {
+                result.freq_mismatches++;
+                if (verbose && mismatch_examples.size() < 5) {
+                    mismatch_examples.push_back(
+                        "\"" + key + "\" seq=" + std::to_string(val_seq) +
+                        " vs par=" + std::to_string(it->second)
+                    );
+                }
+            } else {
+                result.matches++;
+            }
+        }
+
+        // Controlla ngram solo in par
+        for (const auto& [key, val_par] : par_map) {
+            if (seq_map.find(key) == seq_map.end()) {
+                result.only_in_par++;
+                if (verbose && par_only_examples.size() < 5) {
+                    par_only_examples.push_back("\"" + key + "\" (freq=" + std::to_string(val_par) + ")");
+                }
+            }
+        }
+
+        // Determina correttezza
+        result.is_correct = (result.freq_mismatches == 0 &&
+                            result.only_in_seq == 0 &&
+                            result.only_in_par == 0);
+
+        // Calcola accuracy
+        size_t total_ngrams = std::max(result.seq_unique, result.par_unique);
+        if (total_ngrams > 0) {
+            result.accuracy_percent = (double)result.matches / total_ngrams * 100.0;
+        } else {
+            result.accuracy_percent = 100.0;
+        }
+
+        // Stampa dettagli se verbose
+        if (verbose && !result.is_correct) {
+            std::cout << "\n  📊 Dettagli per " << name << ":\n";
+
+            if (!mismatch_examples.empty()) {
+                std::cout << "  ⚠️  Esempi di frequency mismatch:\n";
+                for (const auto& ex : mismatch_examples) {
+                    std::cout << "     - " << ex << "\n";
+                }
+            }
+
+            if (!seq_only_examples.empty()) {
+                std::cout << "  ⚠️  Esempi presenti solo in seq:\n";
+                for (const auto& ex : seq_only_examples) {
+                    std::cout << "     - " << ex << "\n";
+                }
+            }
+
+            if (!par_only_examples.empty()) {
+                std::cout << "  ⚠️  Esempi presenti solo in par:\n";
+                for (const auto& ex : par_only_examples) {
+                    std::cout << "     - " << ex << "\n";
+                }
+            }
+        }
+
+        return result;
+    }
+
+public:
+    static void check_correctness(
+        const std::string& seq_dir = "output_sequential",
+        const std::string& par_dir = "output_parallel",
+        bool verbose = true
+    ) {
+        std::cout << "\n";
+        std::cout << "╔═══════════════════════════════════════════════════════╗\n";
+        std::cout << "║           CORRECTNESS CHECK ANALYZER                  ║\n";
+        std::cout << "║           Confronto SEQ vs PARALLEL                   ║\n";
+        std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
+
+        // Verifica che entrambe le directory esistano
+        if (!fs::exists(seq_dir)) {
+            std::cerr << "❌ Directory '" << seq_dir << "' non trovata!\n";
+            return;
+        }
+        if (!fs::exists(par_dir)) {
+            std::cerr << "❌ Directory '" << par_dir << "' non trovata!\n";
+            return;
+        }
+
+        std::cout << "📂 Sequential output: " << seq_dir << "/\n";
+        std::cout << "📂 Parallel output:   " << par_dir << "/\n\n";
+
+        // Carica tutti i CSV
+        std::cout << "📥 Caricamento files CSV...\n\n";
+
+        auto seq_wb = CSVReader::read_csv(seq_dir + "/word_bigrams_seq.csv");
+        auto par_wb = CSVReader::read_csv(par_dir + "/word_bigrams_par.csv");
+
+        auto seq_wt = CSVReader::read_csv(seq_dir + "/word_trigrams_seq.csv");
+        auto par_wt = CSVReader::read_csv(par_dir + "/word_trigrams_par.csv");
+
+        auto seq_cb = CSVReader::read_csv(seq_dir + "/char_bigrams_seq.csv");
+        auto par_cb = CSVReader::read_csv(par_dir + "/char_bigrams_par.csv");
+
+        auto seq_ct = CSVReader::read_csv(seq_dir + "/char_trigrams_seq.csv");
+        auto par_ct = CSVReader::read_csv(par_dir + "/char_trigrams_par.csv");
+
+        // Confronta
+        std::vector<ComparisonResult> results;
+
+        std::cout << "🔍 Analisi in corso...\n\n";
+
+        results.push_back(compare_maps(seq_wb, par_wb, "Word Bigrams", verbose));
+        results.push_back(compare_maps(seq_wt, par_wt, "Word Trigrams", verbose));
+        results.push_back(compare_maps(seq_cb, par_cb, "Char Bigrams", verbose));
+        results.push_back(compare_maps(seq_ct, par_ct, "Char Trigrams", verbose));
+
+        // Stampa risultati
+        std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+        std::cout << "║                  RISULTATI CONFRONTO                  ║\n";
+        std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
+
+        bool all_correct = true;
+
+        for (const auto& res : results) {
+            std::cout << "┌─────────────────────────────────────────────────────┐\n";
+            std::cout << "│ " << std::left << std::setw(51) << res.name << " │\n";
+            std::cout << "├─────────────────────────────────────────────────────┤\n";
+
+            // Statistiche base
+            std::cout << "│ Unique ngrams (seq):  " << std::right << std::setw(27)
+                      << res.seq_unique << " │\n";
+            std::cout << "│ Unique ngrams (par):  " << std::right << std::setw(27)
+                      << res.par_unique << " │\n";
+            std::cout << "│ Total count (seq):    " << std::right << std::setw(27)
+                      << res.seq_total << " │\n";
+            std::cout << "│ Total count (par):    " << std::right << std::setw(27)
+                      << res.par_total << " │\n";
+            std::cout << "├─────────────────────────────────────────────────────┤\n";
+
+            // Confronto
+            std::cout << "│ Matches perfetti:     " << std::right << std::setw(27)
+                      << res.matches << " │\n";
+            std::cout << "│ Freq. mismatches:     " << std::right << std::setw(27)
+                      << res.freq_mismatches << " │\n";
+            std::cout << "│ Solo in seq:          " << std::right << std::setw(27)
+                      << res.only_in_seq << " │\n";
+            std::cout << "│ Solo in par:          " << std::right << std::setw(27)
+                      << res.only_in_par << " │\n";
+            std::cout << "├─────────────────────────────────────────────────────┤\n";
+
+            // Accuracy
+            std::cout << "│ Accuracy:             " << std::right << std::setw(23) << std::fixed
+                      << std::setprecision(4) << res.accuracy_percent << " %  │\n";
+
+            // Status
+            std::cout << "│ Status:               ";
+            if (res.is_correct) {
+                std::cout << "\033[32m" << std::setw(27) << "✓ CORRETTO" << "\033[0m │\n";
+            } else {
+                std::cout << "\033[31m" << std::setw(27) << "✗ ERRORI" << "\033[0m │\n";
+                all_correct = false;
+            }
+
+            std::cout << "└─────────────────────────────────────────────────────┘\n\n";
+        }
+
+        // Riepilogo finale
+        std::cout << "╔═══════════════════════════════════════════════════════╗\n";
+        if (all_correct) {
+            std::cout << "║        ✓✓✓ CORRECTNESS CHECK PASSED ✓✓✓               ║\n";
+            std::cout << "║                                                       ║\n";
+            std::cout << "║   La versione parallela produce risultati IDENTICI    ║\n";
+            std::cout << "║              alla versione sequenziale!               ║\n";
+        } else {
+            std::cout << "║        ❌❌❌ CORRECTNESS CHECK FAILED ❌❌❌             ║\n";
+            std::cout << "║                                                       ║\n";
+            std::cout << "║     Trovate DIFFERENZE tra seq e parallel!            ║\n";
+            std::cout << "║     Verificare la logica di normalizzazione           ║\n";
+        }
+        std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
+
+        // Statistiche aggregate
+        size_t total_matches = 0;
+        size_t total_errors = 0;
+
+        for (const auto& res : results) {
+            total_matches += res.matches;
+            total_errors += res.freq_mismatches + res.only_in_seq + res.only_in_par;
+        }
+
+        std::cout << " Statistiche complessive:\n";
+        std::cout << "   • Ngrams totali verificati: " << (total_matches + total_errors) << "\n";
+        std::cout << "   • Matches perfetti:         " << total_matches << "\n";
+        std::cout << "   • Errori totali:            " << total_errors << "\n";
+
+        if (total_matches + total_errors > 0) {
+            double overall_accuracy = (double)total_matches / (total_matches + total_errors) * 100.0;
+            std::cout << "   • Accuracy complessiva:     " << std::fixed << std::setprecision(4)
+                      << overall_accuracy << "%\n";
+        }
+
+        std::cout << "\n";
+    }
+};
+
+// ==================== MAIN ====================
+int main(int argc, char* argv[]) {
+    std::string seq_dir = "output_sequential";
+    std::string par_dir = "output_parallel";
+    bool verbose = true;
+
+    // Opzionale: parsing argomenti da linea di comando
+    if (argc >= 3) {
+        seq_dir = argv[1];
+        par_dir = argv[2];
+    }
+    if (argc >= 4) {
+        verbose = (std::string(argv[3]) == "verbose" || std::string(argv[3]) == "v");
+    }
+
+    CorrectnessAnalyzer::check_correctness(seq_dir, par_dir, verbose);
+
+    return 0;
+}
+
