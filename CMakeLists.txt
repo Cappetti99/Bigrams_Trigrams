@@ -39,28 +39,28 @@ endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 
-# 🔹 File sorgenti reali
-set(SOURCE_FILES
-        bigram_seq.cpp
-        book_gutenberg/bigram_par.cpp
-)
+# 🔹 Eseguibile per bigram_seq
+add_executable(bigram_seq bigram_seq.cpp)
 
-# Eseguibile principale
-add_executable(ngram-analyzer ${SOURCE_FILES})
+# 🔹 Eseguibile per bigram_par
+add_executable(bigram_par bigram_par.cpp)
 
-# Link delle librerie necessarie
+# Link delle librerie necessarie per bigram_seq
 if(APPLE)
-    target_link_libraries(ngram-analyzer omp)
+    target_link_libraries(bigram_seq omp "-pthread")
 else()
-    target_link_libraries(ngram-analyzer OpenMP::OpenMP_CXX)
+    target_link_libraries(bigram_seq OpenMP::OpenMP_CXX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(bigram_seq Threads::Threads)
 endif()
 
-# ✅ Supporto thread cross-platform (fix per macOS + Ninja)
+# Link delle librerie necessarie per bigram_par
 if(APPLE)
-    target_link_libraries(ngram-analyzer "-pthread")
+    target_link_libraries(bigram_par omp "-pthread")
 else()
+    target_link_libraries(bigram_par OpenMP::OpenMP_CXX)
     find_package(Threads REQUIRED)
-    target_link_libraries(ngram-analyzer Threads::Threads)
+    target_link_libraries(bigram_par Threads::Threads)
 endif()
 
 # Target personalizzati
@@ -69,14 +69,20 @@ add_custom_target(download-sample
         COMMENT "Downloading Alice in Wonderland from Project Gutenberg..."
 )
 
-add_custom_target(run
-        COMMAND ngram-analyzer alice.txt
-        DEPENDS ngram-analyzer
-        COMMENT "Running ngram-analyzer with alice.txt..."
+add_custom_target(run-seq
+        COMMAND bigram_seq alice.txt
+        DEPENDS bigram_seq
+        COMMENT "Running bigram_seq with alice.txt..."
 )
 
-# Install target
-install(TARGETS ngram-analyzer DESTINATION bin)
+add_custom_target(run-par
+        COMMAND bigram_par alice.txt
+        DEPENDS bigram_par
+        COMMENT "Running bigram_par with alice.txt..."
+)
+
+# Install targets
+install(TARGETS bigram_seq bigram_par DESTINATION bin)
 
 # Print configuration info
 message(STATUS "")
