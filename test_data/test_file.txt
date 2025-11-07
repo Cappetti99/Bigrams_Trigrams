@@ -1,0 +1,12 @@
+*** START OF THIS PROJECT GUTENBERG EBOOK TEST ***
+
+This is a test book. The cat sat on the mat. The cat sat on the mat.
+The dog ran in the park. The dog ran in the park.
+Hello world hello world.
+
+Some numbers: 123 456 789 (should be removed).
+Some punctuation: hello, world! test.
+
+Accented chars: café naïve résumé.
+
+*** END OF THIS PROJECT GUTENBERG EBOOK TEST ***

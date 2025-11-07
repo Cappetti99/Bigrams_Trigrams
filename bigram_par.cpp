@@ -528,7 +528,7 @@ int main() {
     // ==================== SALVATAGGIO RISULTATI ====================
     // Nota: Salviamo solo una volta dato che i risultati sono identici per ogni run.
     // Le 100 run servono solo per ottenere statistiche affidabili sui tempi.
-    std::string output_dir = "output_parallel";
+    std::string output_dir = "test/output_parallel";
     ensure_directory_exists(output_dir);
 
     std::cout << "\n💾 Salvando risultati in " << output_dir << "/...\n";
