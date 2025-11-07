@@ -327,7 +327,7 @@ public:
             my_cb.reserve(50000);
             my_ct.reserve(100000);
 
-            #pragma omp for schedule(dynamic, 1) nowait
+            #pragma omp for schedule(dynamic) nowait
             for (int i = 0; i < total_books; ++i) {
                 const auto& filepath = book_files[i];
                 std::ifstream file(filepath, std::ios::binary | std::ios::ate);
@@ -410,6 +410,28 @@ int main() {
     std::cout << "║             Lorenzo Cappetti, 2025                    ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
 
+    // Richiesta numero di thread
+    int hw_threads = omp_get_max_threads();
+    int num_threads = 0;
+    // Permettiamo "virtual threads" fino a un limite ragionevole per testare l'oversubscription.
+    int virtual_max = std::max(hw_threads * 4, 32);
+
+    std::cout << "🧵 Thread logici disponibili sul sistema: " << hw_threads << "\n";
+    std::cout << "Puoi scegliere fino a " << hw_threads << " thread fisici o usare thread virtuali fino a " << virtual_max << " (oversubscription).\n";
+    std::cout << "Quanti thread vuoi utilizzare? (1-" << virtual_max << "): ";
+    std::cin >> num_threads;
+
+    // Validazione input: accettiamo numeri fino a virtual_max
+    if (std::cin.fail() || num_threads < 1 || num_threads > virtual_max) {
+        std::cin.clear();
+        std::cin.ignore(10000, '\n');
+        std::cout << "⚠️ Input non valido. Uso il massimo fisico (" << hw_threads << " threads)\n";
+        num_threads = hw_threads;
+    } else if (num_threads > hw_threads) {
+        std::cout << "⚠️ Attenzione: stai usando " << num_threads << " thread (oversubscription). Il numero di thread fisici e' " << hw_threads << ".\n";
+    }
+    std::cout << "\n";
+
     std::string folder_path = "/Users/lorenzocappetti/CLionProjects/Bigrams_Trigrams/book_gutenberg";
 
     if (!fs::exists(folder_path) || !fs::is_directory(folder_path)) {
@@ -430,34 +452,86 @@ int main() {
 
     std::cout << "📚 Trovati " << book_files.size() << " libri da processare\n\n";
 
+    // ==================== MULTIPLE RUN BENCHMARK ====================
+    const int NUM_RUNS = 30;
+    std::vector<double> run_times;
+    run_times.reserve(NUM_RUNS);
+
+    std::cout << "🔄 Eseguendo " << NUM_RUNS << " run per ottenere statistiche affidabili...\n\n";
+
     FrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    for (int run = 0; run < NUM_RUNS; ++run) {
+        // Reset dei contatori per ogni run
+        word_bigrams = FrequencyCounter();
+        word_trigrams = FrequencyCounter();
+        char_bigrams = FrequencyCounter();
+        char_trigrams = FrequencyCounter();
 
-    OpenMPProcessor::process_parallel(
-        book_files,
-        word_bigrams, word_trigrams,
-        char_bigrams, char_trigrams
-    );
+        std::cout << "▶ Run " << std::setw(3) << (run + 1) << "/" << NUM_RUNS << " ... ";
+        std::cout.flush();
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
+        auto start_time = std::chrono::high_resolution_clock::now();
 
+        OpenMPProcessor::process_parallel(
+            book_files,
+            word_bigrams, word_trigrams,
+            char_bigrams, char_trigrams,
+            num_threads
+        );
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = end_time - start_time;
+        run_times.push_back(elapsed.count());
+
+        std::cout << "completato in " << std::fixed << std::setprecision(2)
+                  << elapsed.count() << "s\n";
+    }
+
+    // ==================== CALCOLO STATISTICHE ====================
+    double mean = 0.0, min_time = run_times[0], max_time = run_times[0];
+    for (double t : run_times) {
+        mean += t;
+        min_time = std::min(min_time, t);
+        max_time = std::max(max_time, t);
+    }
+    mean /= run_times.size();
+
+    double stddev = 0.0;
+    for (double t : run_times) {
+        stddev += (t - mean) * (t - mean);
+    }
+    stddev = std::sqrt(stddev / run_times.size());
+
+    double cv = (stddev / mean) * 100.0; // Coefficiente di variazione in %
+
+    // ==================== STAMPA STATISTICHE ====================
+    std::cout << "\n";
+    std::cout << "╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║          STATISTICHE PERFORMANCE (" << NUM_RUNS << " run)            ║\n";
+    std::cout << "╠═══════════════════════════════════════════════════════╣\n";
+    std::cout << "║ Media:              " << std::setw(30) << std::fixed << std::setprecision(3)
+              << mean << "s ║\n";
+    std::cout << "║ Minimo:             " << std::setw(30) << min_time << "s ║\n";
+    std::cout << "║ Massimo:            " << std::setw(30) << max_time << "s ║\n";
+    std::cout << "║ Deviazione Std:     " << std::setw(30) << stddev << "s ║\n";
+    std::cout << "║ Coeff. Variazione:  " << std::setw(29) << std::setprecision(2)
+              << cv << "% ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
+
+    // Mostra statistiche degli n-gram (dall'ultimo run)
     StatisticsGenerator::print_statistics(word_bigrams, "Word Bigrams", 2);
     StatisticsGenerator::print_statistics(word_trigrams, "Word Trigrams", 3);
     StatisticsGenerator::print_statistics(char_bigrams, "Char Bigrams", 2);
     StatisticsGenerator::print_statistics(char_trigrams, "Char Trigrams", 3);
 
-    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
-    std::cout << "║ TEMPO TOTALE (parallel): " << std::setw(28) << std::fixed
-              << std::setprecision(2) << elapsed.count() << "s ║\n";
-    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
-
-    // Output in cartella separata: output_parallel
+    // ==================== SALVATAGGIO RISULTATI ====================
+    // Nota: Salviamo solo una volta dato che i risultati sono identici per ogni run.
+    // Le 100 run servono solo per ottenere statistiche affidabili sui tempi.
     std::string output_dir = "output_parallel";
     ensure_directory_exists(output_dir);
 
-    std::cout << "\nSalvando risultati in " << output_dir << "/...\n";
+    std::cout << "\n💾 Salvando risultati in " << output_dir << "/...\n";
     StatisticsGenerator::save_to_file(word_bigrams, output_dir + "/word_bigrams_par.csv");
     StatisticsGenerator::save_to_file(word_trigrams, output_dir + "/word_trigrams_par.csv");
     StatisticsGenerator::save_to_file(char_bigrams, output_dir + "/char_bigrams_par.csv");

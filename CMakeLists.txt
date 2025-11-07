@@ -39,32 +39,30 @@ endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 
-# 🔹 Eseguibile per bigram_seq
+# 🔹 Eseguibili principali
 add_executable(bigram_seq bigram_seq.cpp)
-
-# 🔹 Eseguibile per bigram_par
 add_executable(bigram_par bigram_par.cpp)
-
-# 🔹 Eseguibile per correctness_check
 add_executable(correctness_check correctness_check.cpp)
 
-# Link delle librerie necessarie per bigram_seq
+# 🔹 Nuovo eseguibile per benchmark AoS vs SoA
+add_executable(memory_benchmark AoS_SoA.cpp)
+
+# add par_SoA_AoS executable
+add_executable(par_SoA_AoS par_SoA_AoS.cpp)
+
+# Link delle librerie necessarie
 if(APPLE)
     target_link_libraries(bigram_seq omp "-pthread")
     target_link_libraries(bigram_par omp "-pthread")
+    target_link_libraries(memory_benchmark omp "-pthread")
     # correctness_check non ha bisogno di OpenMP
 else()
     target_link_libraries(bigram_seq OpenMP::OpenMP_CXX)
     target_link_libraries(bigram_par OpenMP::OpenMP_CXX)
-endif()
-
-# Link delle librerie necessarie per bigram_par
-if(APPLE)
-    target_link_libraries(bigram_par omp "-pthread")
-else()
-    target_link_libraries(bigram_par OpenMP::OpenMP_CXX)
+    target_link_libraries(memory_benchmark OpenMP::OpenMP_CXX)
     find_package(Threads REQUIRED)
     target_link_libraries(bigram_par Threads::Threads)
+    target_link_libraries(memory_benchmark Threads::Threads)
 endif()
 
 # Target personalizzati
@@ -85,8 +83,14 @@ add_custom_target(run-par
         COMMENT "Running bigram_par with alice.txt..."
 )
 
+add_custom_target(run-benchmark
+        COMMAND memory_benchmark
+        DEPENDS memory_benchmark
+        COMMENT "Running AoS vs SoA memory benchmark..."
+)
+
 # Install targets
-install(TARGETS bigram_seq bigram_par DESTINATION bin)
+install(TARGETS bigram_seq bigram_par memory_benchmark DESTINATION bin)
 
 # Print configuration info
 message(STATUS "")

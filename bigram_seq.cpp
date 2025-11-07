@@ -13,6 +13,8 @@
 #include <filesystem>
 #include <regex>
 #include <chrono>
+#include <iomanip>
+#include <cmath>
 
 namespace fs = std::filesystem;
 
@@ -307,59 +309,109 @@ int main() {
 
     std::cout << "Trovati " << book_files.size() << " libri da processare\n\n";
 
+    // ==================== MULTIPLE RUN BENCHMARK ====================
+    const int NUM_RUNS = 100;
+    std::vector<double> run_times;
+    run_times.reserve(NUM_RUNS);
+
+    std::cout << "🔄 Eseguendo " << NUM_RUNS << " run per ottenere statistiche affidabili...\n\n";
+
     FrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    for (int run = 0; run < NUM_RUNS; ++run) {
+        // Reset dei contatori per ogni run
+        word_bigrams = FrequencyCounter();
+        word_trigrams = FrequencyCounter();
+        char_bigrams = FrequencyCounter();
+        char_trigrams = FrequencyCounter();
 
-    for (size_t i = 0; i < book_files.size(); ++i) {
-        const auto& filepath = book_files[i];
-        std::cout << "[" << (i+1) << "/" << book_files.size() << "] Processando: "
-                  << fs::path(filepath).filename().string() << "... ";
+        std::cout << "▶ Run " << std::setw(3) << (run + 1) << "/" << NUM_RUNS << " ... ";
         std::cout.flush();
 
-        // ✅ Lettura identica alla versione parallela (binaria)
-        std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-        if (!file) {
-            std::cerr << "Impossibile aprire!\n";
-            continue;
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        for (size_t i = 0; i < book_files.size(); ++i) {
+            const auto& filepath = book_files[i];
+
+            // Lettura identica alla versione parallela (binaria)
+            std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+            if (!file) {
+                continue;
+            }
+
+            std::streamsize size = file.tellg();
+            file.seekg(0, std::ios::beg);
+            std::string text(size, '\0');
+            if (!file.read(&text[0], size)) {
+                continue;
+            }
+
+            text = TextCleaner::clean_text(text);
+
+            SequentialProcessor::process_text_sequential(text, 2, true, word_bigrams);
+            SequentialProcessor::process_text_sequential(text, 3, true, word_trigrams);
+            SequentialProcessor::process_text_sequential(text, 2, false, char_bigrams);
+            SequentialProcessor::process_text_sequential(text, 3, false, char_trigrams);
         }
 
-        std::streamsize size = file.tellg();
-        file.seekg(0, std::ios::beg);
-        std::string text(size, '\0');
-        if (!file.read(&text[0], size)) {
-            std::cerr << "Errore nella lettura!\n";
-            continue;
-        }
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = end_time - start_time;
+        run_times.push_back(elapsed.count());
 
-        text = TextCleaner::clean_text(text);
-
-        SequentialProcessor::process_text_sequential(text, 2, true, word_bigrams);
-        SequentialProcessor::process_text_sequential(text, 3, true, word_trigrams);
-        SequentialProcessor::process_text_sequential(text, 2, false, char_bigrams);
-        SequentialProcessor::process_text_sequential(text, 3, false, char_trigrams);
-
-        std::cout << "OK\n";
+        std::cout << "completato in " << std::fixed << std::setprecision(2)
+                  << elapsed.count() << "s\n";
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
+    // ==================== CALCOLO STATISTICHE ====================
+    double mean = 0.0, min_time = run_times[0], max_time = run_times[0];
+    for (double t : run_times) {
+        mean += t;
+        min_time = std::min(min_time, t);
+        max_time = std::max(max_time, t);
+    }
+    mean /= run_times.size();
 
+    double stddev = 0.0;
+    for (double t : run_times) {
+        stddev += (t - mean) * (t - mean);
+    }
+    stddev = std::sqrt(stddev / run_times.size());
+
+    double cv = (stddev / mean) * 100.0; // Coefficiente di variazione in %
+
+    // ==================== STAMPA STATISTICHE ====================
+    std::cout << "\n";
+    std::cout << "╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║          STATISTICHE PERFORMANCE (" << NUM_RUNS << " run)            ║\n";
+    std::cout << "╠═══════════════════════════════════════════════════════╣\n";
+    std::cout << "║ Media:              " << std::setw(30) << std::fixed << std::setprecision(3)
+              << mean << "s ║\n";
+    std::cout << "║ Minimo:             " << std::setw(30) << min_time << "s ║\n";
+    std::cout << "║ Massimo:            " << std::setw(30) << max_time << "s ║\n";
+    std::cout << "║ Deviazione Std:     " << std::setw(30) << stddev << "s ║\n";
+    std::cout << "║ Coeff. Variazione:  " << std::setw(29) << std::setprecision(2)
+              << cv << "% ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
+
+    // Mostra statistiche degli n-gram (dall'ultimo run)
     StatisticsGenerator::print_statistics(word_bigrams, "Word Bigrams", 2);
     StatisticsGenerator::print_statistics(word_trigrams, "Word Trigrams", 3);
     StatisticsGenerator::print_statistics(char_bigrams, "Char Bigrams", 2);
     StatisticsGenerator::print_statistics(char_trigrams, "Char Trigrams", 3);
 
-    std::cout << "\nTempo totale di esecuzione: " << elapsed.count() << " secondi\n\n";
-
+    // ==================== SALVATAGGIO RISULTATI ====================
+    // Nota: Salviamo solo una volta dato che i risultati sono identici per ogni run.
+    // Le 100 run servono solo per ottenere statistiche affidabili sui tempi.
     std::string output_dir = "output_sequential";
     ensure_directory_exists(output_dir);
 
-    std::cout << "Salvando risultati in " << output_dir << "/...\n";
+    std::cout << "\n💾 Salvando risultati in " << output_dir << "/...\n";
     StatisticsGenerator::save_to_file(word_bigrams, output_dir + "/word_bigrams_seq.csv");
     StatisticsGenerator::save_to_file(word_trigrams, output_dir + "/word_trigrams_seq.csv");
     StatisticsGenerator::save_to_file(char_bigrams, output_dir + "/char_bigrams_seq.csv");
     StatisticsGenerator::save_to_file(char_trigrams, output_dir + "/char_trigrams_seq.csv");
+
+    std::cout << "\n✓ Analisi completata con successo!\n";
 
     return 0;
 }
