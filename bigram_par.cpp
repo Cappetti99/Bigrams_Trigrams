@@ -1,5 +1,5 @@
 //
-// Lorenzo Cappetti, 2025 - OpenMP Version (Final Clean)
+// Lorenzo Cappetti, 2025 - OpenMP Parallel Version (Clean)
 //
 
 #include <iostream>
@@ -11,7 +11,6 @@
 #include <cctype>
 #include <sstream>
 #include <filesystem>
-#include <regex>
 #include <chrono>
 #include <omp.h>
 #include <iomanip>
@@ -24,19 +23,6 @@ static void ensure_directory_exists(const std::string& dir) {
         fs::create_directories(dir);
     }
 }
-
-// ==================== PERFORMANCE PROFILER ====================
-class Profiler {
-    std::chrono::high_resolution_clock::time_point start;
-    std::string name;
-public:
-    Profiler(const std::string& n) : name(n) {
-        start = std::chrono::high_resolution_clock::now();
-    }
-    ~Profiler() {
-        // Profiling silenzioso
-    }
-};
 
 // ==================== TEXT CLEANER ====================
 class TextCleaner {
@@ -63,13 +49,6 @@ public:
     static std::string clean_text(const std::string& text) {
         std::string cleaned = remove_gutenberg_header(text);
         cleaned = remove_gutenberg_footer(cleaned);
-        size_t contents_pos = cleaned.find("Contents");
-        if (contents_pos != std::string::npos && contents_pos < 5000) {
-            size_t chapter_pos = cleaned.find("CHAPTER", contents_pos);
-            if (chapter_pos != std::string::npos) {
-                cleaned = cleaned.substr(0, contents_pos) + cleaned.substr(chapter_pos);
-            }
-        }
         return cleaned;
     }
 };
@@ -91,6 +70,8 @@ private:
 
     static inline std::string process_utf8_char(const unsigned char* bytes, size_t& skip) {
         skip = 0;
+
+        // Solo caratteri a 2 byte (accenti: à, é, ñ, ecc.)
         if ((bytes[0] & 0xE0) == 0xC0 && bytes[1]) {
             skip = 2;
             unsigned char first = bytes[0];
@@ -107,16 +88,14 @@ private:
             }
             return "";
         }
-        if ((bytes[0] & 0xF0) == 0xE0 && bytes[1] && bytes[2]) {
-            skip = 3;
-            if (bytes[0] == 0xE2 && bytes[1] == 0x80 && (bytes[2] >= 0x98 && bytes[2] <= 0x9F))
-                return " ";
+
+        // Skippa tutto il resto (emoji, simboli strani)
+        if (bytes[0] >= 0x80) {
+            skip = 1;
+            while (skip < 4 && bytes[skip] && (bytes[skip] & 0xC0) == 0x80) skip++;
             return "";
         }
-        if ((bytes[0] & 0xF8) == 0xF0 && bytes[1] && bytes[2] && bytes[3]) {
-            skip = 4;
-            return "";
-        }
+
         return "";
     }
 
@@ -125,8 +104,10 @@ public:
         std::string result;
         result.reserve(text.size());
         const unsigned char* to_lower = get_to_lower();
+
         for (size_t i = 0; i < text.size(); ++i) {
             unsigned char c = static_cast<unsigned char>(text[i]);
+
             if (c >= 0x80) {
                 size_t skip;
                 std::string replacement = process_utf8_char(
@@ -137,11 +118,14 @@ public:
                     continue;
                 }
             }
+
             if (std::isdigit(c)) continue;
+
             if (remove_punct && std::ispunct(c)) {
                 result += ' ';
                 continue;
             }
+
             if (std::isalpha(c)) {
                 result += to_lower[c];
             } else if (std::isspace(c)) {
@@ -237,10 +221,6 @@ public:
         for (const auto& [_, count] : frequencies) total += count;
         return total;
     }
-
-    const std::unordered_map<std::string, size_t>& get_frequencies() const {
-        return frequencies;
-    }
 };
 
 // ==================== OPENMP PROCESSOR ====================
@@ -268,10 +248,8 @@ public:
 
     static void parallel_merge(
         std::vector<std::unordered_map<std::string, size_t>>& thread_maps,
-        FrequencyCounter& result,
-        const std::string& type
+        FrequencyCounter& result
     ) {
-        Profiler prof("Merge " + type);
         int num_maps = thread_maps.size();
         while (num_maps > 1) {
             int next_num = (num_maps + 1) / 2;
@@ -302,19 +280,15 @@ public:
             num_threads = omp_get_max_threads();
 
         omp_set_num_threads(num_threads);
-        std::cout << "Usando " << num_threads << " threads\n";
 
         int total_books = book_files.size();
-        size_t total_bytes = 0;
 
         std::vector<std::unordered_map<std::string, size_t>> thread_wb(num_threads);
         std::vector<std::unordered_map<std::string, size_t>> thread_wt(num_threads);
         std::vector<std::unordered_map<std::string, size_t>> thread_cb(num_threads);
         std::vector<std::unordered_map<std::string, size_t>> thread_ct(num_threads);
 
-        auto processing_start = std::chrono::high_resolution_clock::now();
-
-        #pragma omp parallel reduction(+:total_bytes)
+        #pragma omp parallel
         {
             int tid = omp_get_thread_num();
             auto& my_wb = thread_wb[tid];
@@ -331,35 +305,22 @@ public:
             for (int i = 0; i < total_books; ++i) {
                 const auto& filepath = book_files[i];
                 std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-                if (!file) {
-                    #pragma omp critical
-                    std::cerr << "❌ Impossibile aprire: " << filepath << "\n";
-                    continue;
-                }
+                if (!file) continue;
 
                 std::streamsize size = file.tellg();
                 file.seekg(0, std::ios::beg);
                 std::string text(size, '\0');
-                if (!file.read(&text[0], size)) {
-                    continue;
-                }
+                if (!file.read(&text[0], size)) continue;
 
-                total_bytes += size;
                 text = TextCleaner::clean_text(text);
                 process_text_optimized(text, my_wb, my_wt, my_cb, my_ct);
             }
         }
 
-        auto processing_end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> proc_time = processing_end - processing_start;
-
-        std::cout << "✓ Processing completato in " << std::fixed << std::setprecision(2)
-                  << proc_time.count() << "s\n\n";
-
-        parallel_merge(thread_wb, word_bigrams, "Word Bigrams");
-        parallel_merge(thread_wt, word_trigrams, "Word Trigrams");
-        parallel_merge(thread_cb, char_bigrams, "Char Bigrams");
-        parallel_merge(thread_ct, char_trigrams, "Char Trigrams");
+        parallel_merge(thread_wb, word_bigrams);
+        parallel_merge(thread_wt, word_trigrams);
+        parallel_merge(thread_cb, char_bigrams);
+        parallel_merge(thread_ct, char_trigrams);
     }
 };
 
@@ -388,7 +349,6 @@ public:
     }
 
     static void save_to_file(const FrequencyCounter& counter, const std::string& filename) {
-        Profiler prof("Save " + filename);
         std::ofstream out(filename);
         if (!out) {
             std::cerr << "❌ Errore nell'aprire il file: " << filename << "\n";
@@ -399,43 +359,53 @@ public:
         for (const auto& [ngram, freq] : top) {
             out << "\"" << ngram << "\"," << freq << "\n";
         }
+        std::cout << "💾 " << filename << " (" << top.size() << " n-grams)\n";
     }
 };
 
 // ==================== MAIN ====================
 int main() {
-    std::cout << "\n";
-    std::cout << "╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
     std::cout << "║          OpenMP N-gram Analyzer (Parallel)            ║\n";
     std::cout << "║             Lorenzo Cappetti, 2025                    ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
 
-    // Richiesta numero di thread
     int hw_threads = omp_get_max_threads();
-    int num_threads = 0;
-    // Permettiamo "virtual threads" fino a un limite ragionevole per testare l'oversubscription.
-    int virtual_max = std::max(hw_threads * 4, 32);
+    const int MAX_VIRTUAL_THREADS = 32;
+    int num_threads;
 
-    std::cout << "🧵 Thread logici disponibili sul sistema: " << hw_threads << "\n";
-    std::cout << "Puoi scegliere fino a " << hw_threads << " thread fisici o usare thread virtuali fino a " << virtual_max << " (oversubscription).\n";
-    std::cout << "Quanti thread vuoi utilizzare? (1-" << virtual_max << "): ";
-    std::cin >> num_threads;
+    std::cout << "🧵 Thread disponibili: " << hw_threads << " (max virtuale: " << MAX_VIRTUAL_THREADS << ")\n";
+    std::cout << "Quanti thread vuoi usare? (1-" << MAX_VIRTUAL_THREADS << "): ";
+    std::cout.flush();
 
-    // Validazione input: accettiamo numeri fino a virtual_max
-    if (std::cin.fail() || num_threads < 1 || num_threads > virtual_max) {
-        std::cin.clear();
-        std::cin.ignore(10000, '\n');
-        std::cout << "⚠️ Input non valido. Uso il massimo fisico (" << hw_threads << " threads)\n";
-        num_threads = hw_threads;
-    } else if (num_threads > hw_threads) {
-        std::cout << "⚠️ Attenzione: stai usando " << num_threads << " thread (oversubscription). Il numero di thread fisici e' " << hw_threads << ".\n";
+    while (true) {
+        std::cin >> num_threads;
+
+        if (std::cin.fail()) {
+            std::cin.clear();
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cout << "⚠️  Inserisci un numero valido (1-" << MAX_VIRTUAL_THREADS << "): ";
+            continue;
+        }
+
+        if (num_threads < 1 || num_threads > MAX_VIRTUAL_THREADS) {
+            std::cout << "⚠️  Fuori range! Inserisci un valore tra 1 e " << MAX_VIRTUAL_THREADS << " : ";
+            continue;
+        }
+
+        break;
     }
-    std::cout << "\n";
+
+    if (num_threads > hw_threads) {
+        std::cout << "⚡ Usando " << num_threads << " thread VIRTUALI (oltre i " << hw_threads << " fisici)\n\n";
+    } else {
+        std::cout << "✅ Usando " << num_threads << " thread fisici\n\n";
+    }
 
     std::string folder_path = "/Users/lorenzocappetti/CLionProjects/Bigrams_Trigrams/book_gutenberg";
 
     if (!fs::exists(folder_path) || !fs::is_directory(folder_path)) {
-        std::cerr << "❌ Errore: cartella '" << folder_path << "' non trovata!\n";
+        std::cerr << "❌ Cartella non trovata: " << folder_path << "\n";
         return 1;
     }
 
@@ -446,30 +416,28 @@ int main() {
     }
 
     if (book_files.empty()) {
-        std::cerr << "❌ Nessun file .txt trovato nella cartella!\n";
+        std::cerr << "❌ Nessun file .txt trovato!\n";
         return 1;
     }
 
-    std::cout << "📚 Trovati " << book_files.size() << " libri da processare\n\n";
+    std::cout << "📚 Trovati " << book_files.size() << " libri\n";
 
-    // ==================== MULTIPLE RUN BENCHMARK ====================
-    const int NUM_RUNS = 30;
+    const int WARMUP_RUNS = 2;  // Prime run da scartare per warm-up CPU/cache
+    const int MEASURED_RUNS = 10;  // Run effettive da misurare
+    const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;  // Totale: 12 run
     std::vector<double> run_times;
     run_times.reserve(NUM_RUNS);
 
-    std::cout << "🔄 Eseguendo " << NUM_RUNS << " run per ottenere statistiche affidabili...\n\n";
+    std::cout << "🔄 Eseguendo " << NUM_RUNS << " run totali (" << WARMUP_RUNS
+              << " warm-up + " << MEASURED_RUNS << " misurate)...\n";
 
     FrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
     for (int run = 0; run < NUM_RUNS; ++run) {
-        // Reset dei contatori per ogni run
         word_bigrams = FrequencyCounter();
         word_trigrams = FrequencyCounter();
         char_bigrams = FrequencyCounter();
         char_trigrams = FrequencyCounter();
-
-        std::cout << "▶ Run " << std::setw(3) << (run + 1) << "/" << NUM_RUNS << " ... ";
-        std::cout.flush();
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -484,31 +452,37 @@ int main() {
         std::chrono::duration<double> elapsed = end_time - start_time;
         run_times.push_back(elapsed.count());
 
-        std::cout << "completato in " << std::fixed << std::setprecision(2)
-                  << elapsed.count() << "s\n";
+        std::cout << "  Run " << std::setw(2) << (run + 1) << "/" << NUM_RUNS;
+        if (run < WARMUP_RUNS) {
+            std::cout << " [WARM-UP]: ";
+        } else {
+            std::cout << ": ";
+        }
+        std::cout << std::fixed << std::setprecision(2) << elapsed.count() << "s\n";
     }
 
-    // ==================== CALCOLO STATISTICHE ====================
-    double mean = 0.0, min_time = run_times[0], max_time = run_times[0];
-    for (double t : run_times) {
+    // ==================== CALCOLO STATISTICHE (SCARTANDO WARM-UP) ====================
+    // Scarta le prime WARMUP_RUNS run per stabilizzare CPU/cache
+    std::vector<double> measured_times(run_times.begin() + WARMUP_RUNS, run_times.end());
+
+    double mean = 0.0, min_time = measured_times[0], max_time = measured_times[0];
+    for (double t : measured_times) {
         mean += t;
         min_time = std::min(min_time, t);
         max_time = std::max(max_time, t);
     }
-    mean /= run_times.size();
+    mean /= measured_times.size();
 
     double stddev = 0.0;
-    for (double t : run_times) {
+    for (double t : measured_times) {
         stddev += (t - mean) * (t - mean);
     }
-    stddev = std::sqrt(stddev / run_times.size());
+    stddev = std::sqrt(stddev / measured_times.size());
 
-    double cv = (stddev / mean) * 100.0; // Coefficiente di variazione in %
+    double cv = (stddev / mean) * 100.0;
 
-    // ==================== STAMPA STATISTICHE ====================
-    std::cout << "\n";
-    std::cout << "╔═══════════════════════════════════════════════════════╗\n";
-    std::cout << "║          STATISTICHE PERFORMANCE (" << NUM_RUNS << " run)            ║\n";
+    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║    STATISTICHE PERFORMANCE (" << (NUM_RUNS - WARMUP_RUNS) << " run misurate)      ║\n";
     std::cout << "╠═══════════════════════════════════════════════════════╣\n";
     std::cout << "║ Media:              " << std::setw(30) << std::fixed << std::setprecision(3)
               << mean << "s ║\n";
@@ -517,27 +491,25 @@ int main() {
     std::cout << "║ Deviazione Std:     " << std::setw(30) << stddev << "s ║\n";
     std::cout << "║ Coeff. Variazione:  " << std::setw(29) << std::setprecision(2)
               << cv << "% ║\n";
+    std::cout << "║                                                       ║\n";
+    std::cout << "║ Note: Scartate " << WARMUP_RUNS << " run di warm-up iniziali          ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════╝\n";
 
-    // Mostra statistiche degli n-gram (dall'ultimo run)
     StatisticsGenerator::print_statistics(word_bigrams, "Word Bigrams", 2);
     StatisticsGenerator::print_statistics(word_trigrams, "Word Trigrams", 3);
     StatisticsGenerator::print_statistics(char_bigrams, "Char Bigrams", 2);
     StatisticsGenerator::print_statistics(char_trigrams, "Char Trigrams", 3);
 
-    // ==================== SALVATAGGIO RISULTATI ====================
-    // Nota: Salviamo solo una volta dato che i risultati sono identici per ogni run.
-    // Le 100 run servono solo per ottenere statistiche affidabili sui tempi.
     std::string output_dir = "test/output_parallel";
     ensure_directory_exists(output_dir);
 
-    std::cout << "\n💾 Salvando risultati in " << output_dir << "/...\n";
+    std::cout << "\n💾 Salvando risultati in " << output_dir << "/\n";
     StatisticsGenerator::save_to_file(word_bigrams, output_dir + "/word_bigrams_par.csv");
     StatisticsGenerator::save_to_file(word_trigrams, output_dir + "/word_trigrams_par.csv");
     StatisticsGenerator::save_to_file(char_bigrams, output_dir + "/char_bigrams_par.csv");
     StatisticsGenerator::save_to_file(char_trigrams, output_dir + "/char_trigrams_par.csv");
 
-    std::cout << "\n✓ Analisi completata con successo!\n";
+    std::cout << "\n✅ Completato!\n\n";
 
     return 0;
 }

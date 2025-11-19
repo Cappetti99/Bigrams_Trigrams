@@ -310,11 +310,15 @@ int main() {
     std::cout << "Trovati " << book_files.size() << " libri da processare\n\n";
 
     // ==================== MULTIPLE RUN BENCHMARK ====================
-    const int NUM_RUNS = 100;
+    const int WARMUP_RUNS = 2;  // Prime run da scartare per warm-up CPU/cache
+    const int MEASURED_RUNS = 10;  // Run effettive da misurare
+    const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;  // Totale: 12 run
     std::vector<double> run_times;
     run_times.reserve(NUM_RUNS);
 
-    std::cout << "🔄 Eseguendo " << NUM_RUNS << " run per ottenere statistiche affidabili...\n\n";
+    std::cout << "🔄 Eseguendo " << NUM_RUNS << " run totali (" << WARMUP_RUNS
+              << " warm-up + " << MEASURED_RUNS
+              << " misurate) per ottenere statistiche affidabili...\n\n";
 
     FrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
@@ -325,7 +329,12 @@ int main() {
         char_bigrams = FrequencyCounter();
         char_trigrams = FrequencyCounter();
 
-        std::cout << "▶ Run " << std::setw(3) << (run + 1) << "/" << NUM_RUNS << " ... ";
+        std::cout << "▶ Run " << std::setw(3) << (run + 1) << "/" << NUM_RUNS;
+        if (run < WARMUP_RUNS) {
+            std::cout << " [WARM-UP] ... ";
+        } else {
+            std::cout << " ... ";
+        }
         std::cout.flush();
 
         auto start_time = std::chrono::high_resolution_clock::now();
@@ -362,27 +371,30 @@ int main() {
                   << elapsed.count() << "s\n";
     }
 
-    // ==================== CALCOLO STATISTICHE ====================
-    double mean = 0.0, min_time = run_times[0], max_time = run_times[0];
-    for (double t : run_times) {
+    // ==================== CALCOLO STATISTICHE (SCARTANDO WARM-UP) ====================
+    // Scarta le prime WARMUP_RUNS run per stabilizzare CPU/cache
+    std::vector<double> measured_times(run_times.begin() + WARMUP_RUNS, run_times.end());
+
+    double mean = 0.0, min_time = measured_times[0], max_time = measured_times[0];
+    for (double t : measured_times) {
         mean += t;
         min_time = std::min(min_time, t);
         max_time = std::max(max_time, t);
     }
-    mean /= run_times.size();
+    mean /= measured_times.size();
 
     double stddev = 0.0;
-    for (double t : run_times) {
+    for (double t : measured_times) {
         stddev += (t - mean) * (t - mean);
     }
-    stddev = std::sqrt(stddev / run_times.size());
+    stddev = std::sqrt(stddev / measured_times.size());
 
     double cv = (stddev / mean) * 100.0; // Coefficiente di variazione in %
 
     // ==================== STAMPA STATISTICHE ====================
     std::cout << "\n";
     std::cout << "╔═══════════════════════════════════════════════════════╗\n";
-    std::cout << "║          STATISTICHE PERFORMANCE (" << NUM_RUNS << " run)            ║\n";
+    std::cout << "║    STATISTICHE PERFORMANCE (" << (NUM_RUNS - WARMUP_RUNS) << " run misurate)     ║\n";
     std::cout << "╠═══════════════════════════════════════════════════════╣\n";
     std::cout << "║ Media:              " << std::setw(30) << std::fixed << std::setprecision(3)
               << mean << "s ║\n";
@@ -391,6 +403,8 @@ int main() {
     std::cout << "║ Deviazione Std:     " << std::setw(30) << stddev << "s ║\n";
     std::cout << "║ Coeff. Variazione:  " << std::setw(29) << std::setprecision(2)
               << cv << "% ║\n";
+    std::cout << "║                                                       ║\n";
+    std::cout << "║ Note: Scartate " << WARMUP_RUNS << " run di warm-up iniziali          ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════╝\n";
 
     // Mostra statistiche degli n-gram (dall'ultimo run)
