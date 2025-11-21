@@ -15,6 +15,7 @@
 #include <omp.h>
 #include <iomanip>
 #include <cmath>
+#include <ctime>
 
 namespace fs = std::filesystem;
 
@@ -425,7 +426,9 @@ int main() {
     const int WARMUP_RUNS = 2;  // Prime run da scartare per warm-up CPU/cache
     const int MEASURED_RUNS = 10;  // Run effettive da misurare
     const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;  // Totale: 12 run
-    std::vector<double> run_times;
+
+    struct RunResult { double wall; double cpu; bool warmup; };
+    std::vector<RunResult> run_times;
     run_times.reserve(NUM_RUNS);
 
     std::cout << "🔄 Eseguendo " << NUM_RUNS << " run totali (" << WARMUP_RUNS
@@ -440,6 +443,7 @@ int main() {
         char_trigrams = FrequencyCounter();
 
         auto start_time = std::chrono::high_resolution_clock::now();
+        std::clock_t start_cpu = std::clock();
 
         OpenMPProcessor::process_parallel(
             book_files,
@@ -449,8 +453,11 @@ int main() {
         );
 
         auto end_time = std::chrono::high_resolution_clock::now();
+        std::clock_t end_cpu = std::clock();
         std::chrono::duration<double> elapsed = end_time - start_time;
-        run_times.push_back(elapsed.count());
+        double cpu_seconds = double(end_cpu - start_cpu) / double(CLOCKS_PER_SEC);
+
+        run_times.push_back(RunResult{elapsed.count(), cpu_seconds, run < WARMUP_RUNS});
 
         std::cout << "  Run " << std::setw(2) << (run + 1) << "/" << NUM_RUNS;
         if (run < WARMUP_RUNS) {
@@ -458,12 +465,19 @@ int main() {
         } else {
             std::cout << ": ";
         }
-        std::cout << std::fixed << std::setprecision(2) << elapsed.count() << "s\n";
+        std::cout << std::fixed << std::setprecision(2) << elapsed.count()
+                  << "s (cpu: " << cpu_seconds << "s)\n";
     }
 
     // ==================== CALCOLO STATISTICHE (SCARTANDO WARM-UP) ====================
-    // Scarta le prime WARMUP_RUNS run per stabilizzare CPU/cache
-    std::vector<double> measured_times(run_times.begin() + WARMUP_RUNS, run_times.end());
+    std::vector<double> measured_times;
+    std::vector<double> measured_cpu;
+    for (const auto& r : run_times) {
+        if (!r.warmup) {
+            measured_times.push_back(r.wall);
+            measured_cpu.push_back(r.cpu);
+        }
+    }
 
     double mean = 0.0, min_time = measured_times[0], max_time = measured_times[0];
     for (double t : measured_times) {
@@ -478,8 +492,111 @@ int main() {
         stddev += (t - mean) * (t - mean);
     }
     stddev = std::sqrt(stddev / measured_times.size());
-
     double cv = (stddev / mean) * 100.0;
+
+    double mean_cpu = 0.0, min_cpu = measured_cpu[0], max_cpu = measured_cpu[0];
+    for (double t : measured_cpu) {
+        mean_cpu += t;
+        min_cpu = std::min(min_cpu, t);
+        max_cpu = std::max(max_cpu, t);
+    }
+    mean_cpu /= measured_cpu.size();
+
+    double stddev_cpu = 0.0;
+    for (double t : measured_cpu) stddev_cpu += (t - mean_cpu) * (t - mean_cpu);
+    stddev_cpu = std::sqrt(stddev_cpu / measured_cpu.size());
+    double cv_cpu = (stddev_cpu / mean_cpu) * 100.0;
+
+    // ==================== SALVA REPORT PERFORMANCE SU FILE ====================
+    std::string output_dir = "test/output_parallel";
+    ensure_directory_exists(output_dir);
+
+    std::string perf_report = output_dir + "/performance_report_T" + std::to_string(num_threads) + ".txt";
+    std::ofstream report_file(perf_report);
+    if (report_file) {
+        report_file << "═══════════════════════════════════════════════════════════════\n";
+        report_file << "  PERFORMANCE METRICS REPORT - PARALLEL N-GRAM ANALYZER\n";
+        report_file << "  Lorenzo Cappetti, 2025\n";
+        report_file << "  Generato: " << __DATE__ << " " << __TIME__ << "\n";
+        report_file << "═══════════════════════════════════════════════════════════════\n\n";
+
+        report_file << "1. CONFIGURAZIONE ESECUZIONE\n";
+        report_file << "   - Numero libri processati:  " << book_files.size() << "\n";
+        report_file << "   - Thread utilizzati:        " << num_threads << "\n";
+        report_file << "   - Thread fisici disponibili:" << hw_threads << "\n";
+        report_file << "   - Run totali:               " << NUM_RUNS << "\n";
+        report_file << "   - Run warm-up (scartate):   " << WARMUP_RUNS << "\n";
+        report_file << "   - Run misurate:             " << MEASURED_RUNS << "\n\n";
+
+        report_file << "2. EXECUTION TIME METRICS (Wall-Clock)\n";
+        report_file << "   ┌─────────────────────────────────────────────────┐\n";
+        report_file << "   │ Media:           " << std::setw(10) << std::fixed << std::setprecision(3)
+               << mean << " s                   │\n";
+        report_file << "   │ Minimo:          " << std::setw(10) << min_time << " s                   │\n";
+        report_file << "   │ Massimo:         " << std::setw(10) << max_time << " s                   │\n";
+        report_file << "   │ Deviazione Std:  " << std::setw(10) << stddev << " s                   │\n";
+        report_file << "   │ Coeff. Variaz.:  " << std::setw(9) << std::setprecision(2)
+               << cv << " %                    │\n";
+        report_file << "   └─────────────────────────────────────────────────┘\n\n";
+
+        report_file << "3. CPU TIME METRICS (somma di tutti i thread)\n";
+        report_file << "   ┌─────────────────────────────────────────────────┐\n";
+        report_file << "   │ Media:           " << std::setw(10) << std::fixed << std::setprecision(3)
+               << mean_cpu << " s                   │\n";
+        report_file << "   │ Minimo:          " << std::setw(10) << min_cpu << " s                   │\n";
+        report_file << "   │ Massimo:         " << std::setw(10) << max_cpu << " s                   │\n";
+        report_file << "   │ Deviazione Std:  " << std::setw(10) << stddev_cpu << " s                   │\n";
+        report_file << "   │ Coeff. Variaz.:  " << std::setw(9) << std::setprecision(2)
+               << cv_cpu << " %                    │\n";
+        report_file << "   └─────────────────────────────────────────────────┘\n\n";
+
+        double parallelism_ratio = mean_cpu / mean;
+        report_file << "4. PARALLELISMO E EFFICIENZA\n";
+        report_file << "   - Parallelism ratio (CPU/Wall):  " << std::fixed << std::setprecision(2)
+               << parallelism_ratio << "x\n";
+        report_file << "   - Efficienza parallela:          " << std::setprecision(1)
+               << (parallelism_ratio / num_threads * 100.0) << "%\n";
+        report_file << "   - Speedup teorico massimo:       " << num_threads << "x\n";
+        report_file << "   - Speedup effettivo (vs seq):    da calcolare dopo run sequenziale\n\n";
+
+        report_file << "5. DETTAGLIO RUN INDIVIDUALI\n";
+        report_file << "   Run  Warmup  Wall-Time(s)  CPU-Time(s)  Parallel-Ratio\n";
+        report_file << "   ───  ──────  ────────────  ───────────  ──────────────\n";
+        for (size_t i = 0; i < run_times.size(); ++i) {
+            double ratio = run_times[i].cpu / run_times[i].wall;
+            report_file << "   " << std::setw(3) << (i+1) << "    "
+                   << (run_times[i].warmup ? "YES" : " NO") << "    "
+                   << std::setw(10) << std::fixed << std::setprecision(3) << run_times[i].wall << "    "
+                   << std::setw(10) << run_times[i].cpu << "      "
+                   << std::setw(6) << std::setprecision(2) << ratio << "x\n";
+        }
+        report_file << "\n";
+
+        report_file << "6. STABILITÀ E AFFIDABILITÀ\n";
+        report_file << "   - Variabilità wall-clock:  ";
+        if (cv < 2.0) report_file << "ECCELLENTE (< 2%)\n";
+        else if (cv < 5.0) report_file << "BUONA (< 5%)\n";
+        else if (cv < 10.0) report_file << "ACCETTABILE (< 10%)\n";
+        else report_file << "ALTA (≥ 10%)\n";
+
+        report_file << "   - Variabilità CPU-time:    ";
+        if (cv_cpu < 2.0) report_file << "ECCELLENTE (< 2%)\n";
+        else if (cv_cpu < 5.0) report_file << "BUONA (< 5%)\n";
+        else if (cv_cpu < 10.0) report_file << "ACCETTABILE (< 10%)\n";
+        else report_file << "ALTA (≥ 10%)\n\n";
+
+        report_file << "7. NOTE\n";
+        report_file << "   - Le prime " << WARMUP_RUNS << " run sono state scartate per warm-up CPU/cache\n";
+        report_file << "   - Tutte le statistiche sono calcolate solo sulle " << MEASURED_RUNS << " run misurate\n";
+        report_file << "   - CPU time è la somma del tempo di tutti i thread (misurato con std::clock)\n";
+        report_file << "   - Parallel-Ratio = CPU-time / Wall-time (ideale = num_threads)\n\n";
+
+        report_file << "═══════════════════════════════════════════════════════════════\n";
+        report_file.close();
+        std::cout << "📊 Report performance salvato: " << perf_report << "\n";
+    } else {
+        std::cerr << "⚠️  Impossibile salvare report performance\n";
+    }
 
     std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
     std::cout << "║    STATISTICHE PERFORMANCE (" << (NUM_RUNS - WARMUP_RUNS) << " run misurate)      ║\n";
@@ -500,8 +617,6 @@ int main() {
     StatisticsGenerator::print_statistics(char_bigrams, "Char Bigrams", 2);
     StatisticsGenerator::print_statistics(char_trigrams, "Char Trigrams", 3);
 
-    std::string output_dir = "test/output_parallel";
-    ensure_directory_exists(output_dir);
 
     std::cout << "\n💾 Salvando risultati in " << output_dir << "/\n";
     StatisticsGenerator::save_to_file(word_bigrams, output_dir + "/word_bigrams_par.csv");

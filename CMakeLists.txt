@@ -46,6 +46,8 @@ add_executable(bigram_par bigram_par.cpp)
 add_executable(correctness_check correctness_check.cpp)
 add_executable(par_SoA_AoS par_SoA_AoS.cpp)
 add_executable(test_correctness test_correctness.cpp)
+add_executable(test_scheduling test_scheduling.cpp)
+add_executable(test_pattern_RMvsCM test_pattern_RMvsCM.cpp)
 
 # Link delle librerie necessarie
 if(APPLE)
@@ -54,6 +56,8 @@ if(APPLE)
     target_link_libraries(par_SoA_AoS omp pthread)
     target_link_libraries(test_correctness omp pthread)
     target_link_libraries(correctness_check omp pthread)
+    target_link_libraries(test_scheduling omp pthread)
+    target_link_libraries(test_pattern_RMvsCM omp pthread)
 else()
     find_package(Threads REQUIRED)
     target_link_libraries(bigram_seq OpenMP::OpenMP_CXX Threads::Threads)
@@ -61,6 +65,9 @@ else()
     target_link_libraries(par_SoA_AoS OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(test_correctness OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(correctness_check OpenMP::OpenMP_CXX Threads::Threads)
+    target_link_libraries(test_scheduling OpenMP::OpenMP_CXX Threads::Threads)
+    target_link_libraries(test_scheduling_aos OpenMP::OpenMP_CXX Threads::Threads)
+    target_link_libraries(test_pattern_RMvsCM OpenMP::OpenMP_CXX Threads::Threads)
 endif()
 
 # Target personalizzati
@@ -88,7 +95,7 @@ add_custom_target(run-test
 )
 
 # Install targets (solo quelli esistenti)
-install(TARGETS bigram_seq bigram_par par_SoA_AoS test_correctness correctness_check DESTINATION bin)
+install(TARGETS bigram_seq bigram_par par_SoA_AoS test_correctness correctness_check test_scheduling test_pattern_RMvsCM DESTINATION bin)
 
 # Print configuration info
 message(STATUS "")

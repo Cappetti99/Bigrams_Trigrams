@@ -1,5 +1,6 @@
 //
-// Lorenzo Cappetti, 2025 - Sequential Version (Updated Normalization)
+// Lorenzo Cappetti, 2025 - Sequential Version (DEFINITIVAMENTE CORRETTO)
+// IDENTICO al Tokenizer del test e delle versioni parallele
 //
 
 #include <iostream>
@@ -11,21 +12,23 @@
 #include <cctype>
 #include <sstream>
 #include <filesystem>
-#include <regex>
 #include <chrono>
 #include <iomanip>
+#include <numeric>
 #include <cmath>
+#include <ctime>
 
 namespace fs = std::filesystem;
 
-// Helper per creare directory se non esiste
 static void ensure_directory_exists(const std::string& dir) {
     if (!fs::exists(dir)) {
         fs::create_directories(dir);
     }
 }
 
-// ==================== TEXT CLEANER ====================
+//═══════════════════════════════════════════════════════════════
+// TEXT CLEANER
+//═══════════════════════════════════════════════════════════════
 class TextCleaner {
 public:
     static std::string remove_gutenberg_header(const std::string& text) {
@@ -50,18 +53,13 @@ public:
     static std::string clean_text(const std::string& text) {
         std::string cleaned = remove_gutenberg_header(text);
         cleaned = remove_gutenberg_footer(cleaned);
-        size_t contents_pos = cleaned.find("Contents");
-        if (contents_pos != std::string::npos && contents_pos < 5000) {
-            size_t chapter_pos = cleaned.find("CHAPTER", contents_pos);
-            if (chapter_pos != std::string::npos) {
-                cleaned = cleaned.substr(0, contents_pos) + cleaned.substr(chapter_pos);
-            }
-        }
         return cleaned;
     }
 };
 
-// ==================== TOKENIZER ====================
+//═══════════════════════════════════════════════════════════════
+// TOKENIZER - IDENTICO A QUELLO DEL TEST DI CORRETTEZZA
+//═══════════════════════════════════════════════════════════════
 class Tokenizer {
 private:
     static const unsigned char* get_to_lower() {
@@ -108,7 +106,6 @@ private:
     }
 
 public:
-    // ✅ Normalizzazione identica alla versione parallela
     static std::string normalize(const std::string& text, bool remove_punct = false) {
         std::string result;
         result.reserve(text.size());
@@ -138,294 +135,610 @@ public:
         }
         return result;
     }
-
-    static std::vector<std::string> tokenize_words(const std::string& text) {
-        std::vector<std::string> tokens;
-        tokens.reserve(text.size() / 6);
-        std::istringstream iss(text);
-        std::string word;
-        while (iss >> word) {
-            if (!word.empty()) tokens.push_back(word);
-        }
-        return tokens;
-    }
-
-    static std::vector<char> tokenize_chars(const std::string& text) {
-        std::vector<char> chars;
-        chars.reserve(text.size());
-        for (char c : text) {
-            if (!std::isspace(static_cast<unsigned char>(c))) {
-                chars.push_back(c);
-            }
-        }
-        return chars;
-    }
 };
 
-// ==================== N-GRAM EXTRACTOR ====================
-template<typename T>
-class NgramExtractor {
-public:
-    static std::vector<std::vector<T>> extract(const std::vector<T>& tokens, size_t n) {
-        std::vector<std::vector<T>> ngrams;
-        if (tokens.size() < n) return ngrams;
-        ngrams.reserve(tokens.size() - n + 1);
-        for (size_t i = 0; i <= tokens.size() - n; ++i) {
-            ngrams.emplace_back(tokens.begin() + i, tokens.begin() + i + n);
-        }
-        return ngrams;
-    }
-
-    static std::string ngram_to_string(const std::vector<T>& ngram) {
-        std::ostringstream oss;
-        for (size_t i = 0; i < ngram.size(); ++i) {
-            if (i > 0) oss << " ";
-            oss << ngram[i];
-        }
-        return oss.str();
-    }
-};
-
-// ==================== FREQUENCY COUNTER ====================
-class FrequencyCounter {
+//═══════════════════════════════════════════════════════════════
+// OPTIMIZED STRING POOL
+//═══════════════════════════════════════════════════════════════
+class OptimizedStringPool {
 private:
-    std::unordered_map<std::string, size_t> frequencies;
+    std::vector<char> arena;
+    std::vector<std::string_view> id_to_word;
+    std::unordered_map<std::string_view, size_t> word_to_id;
 
 public:
-    void add_ngram(const std::string& ngram) {
-        frequencies[ngram]++;
+    OptimizedStringPool() {
+        arena.reserve(10'000'000);
     }
 
-    void merge(const std::unordered_map<std::string, size_t>& other) {
-        for (const auto& [ngram, count] : other) {
-            frequencies[ngram] += count;
+    size_t intern(std::string_view s) {
+        auto it = word_to_id.find(s);
+        if (it != word_to_id.end()) {
+            return it->second;
         }
+        size_t pos = arena.size();
+        arena.insert(arena.end(), s.begin(), s.end());
+        std::string_view view(arena.data() + pos, s.size());
+        size_t new_id = id_to_word.size();
+        id_to_word.push_back(view);
+        word_to_id[view] = new_id;
+        return new_id;
+    }
+
+    std::string_view get(size_t id) const {
+        return id_to_word[id];
+    }
+
+    size_t size() const { return id_to_word.size(); }
+};
+
+//═══════════════════════════════════════════════════════════════
+// NGRAM ID
+//═══════════════════════════════════════════════════════════════
+struct NgramID {
+    size_t word_ids[3];
+    size_t length;
+
+    bool operator==(const NgramID& other) const noexcept {
+        if (length != other.length) return false;
+        for (size_t i = 0; i < length; ++i) {
+            if (word_ids[i] != other.word_ids[i]) return false;
+        }
+        return true;
+    }
+};
+
+struct NgramIDHash {
+    size_t operator()(const NgramID& n) const noexcept {
+        size_t hash = n.length;
+        for (size_t i = 0; i < n.length; ++i) {
+            hash ^= (n.word_ids[i] * 2654435761ULL) + (hash << 6) + (hash >> 2);
+        }
+        return hash;
+    }
+};
+
+//═══════════════════════════════════════════════════════════════
+// HYBRID FREQUENCY COUNTER
+//═══════════════════════════════════════════════════════════════
+class HybridFrequencyCounter {
+private:
+    OptimizedStringPool pool;
+    std::vector<NgramID> ngram_ids;
+    std::vector<size_t> frequencies;
+    bool finalized = false;
+
+public:
+    void build_from_aos(const std::unordered_map<std::string, size_t>& aos_map) {
+        size_t total_size = aos_map.size();
+        ngram_ids.clear();
+        frequencies.clear();
+        ngram_ids.reserve(total_size);
+        frequencies.reserve(total_size);
+
+        for (const auto& [ngram_str, freq] : aos_map) {
+            NgramID id;
+            id.length = 0;
+            size_t start = 0;
+            size_t pos = 0;
+
+            while (pos <= ngram_str.size() && id.length < 3) {
+                if (pos == ngram_str.size() || ngram_str[pos] == ' ') {
+                    if (pos > start) {
+                        std::string_view word(&ngram_str[start], pos - start);
+                        id.word_ids[id.length++] = pool.intern(word);
+                    }
+                    start = pos + 1;
+                }
+                pos++;
+            }
+            ngram_ids.push_back(id);
+            frequencies.push_back(freq);
+        }
+        finalized = true;
     }
 
     std::vector<std::pair<std::string, size_t>> get_top_n(size_t n) const {
-        std::vector<std::pair<std::string, size_t>> sorted(frequencies.begin(), frequencies.end());
+        if (!finalized) {
+            throw std::runtime_error("Devi chiamare build_from_aos() prima!");
+        }
+        std::vector<size_t> indices(frequencies.size());
+        std::iota(indices.begin(), indices.end(), 0);
+        size_t k = std::min(n, indices.size());
         std::partial_sort(
-            sorted.begin(),
-            sorted.begin() + std::min(n, sorted.size()),
-            sorted.end(),
-            [](const auto& a, const auto& b) { return a.second > b.second; }
+            indices.begin(),
+            indices.begin() + k,
+            indices.end(),
+            [this](size_t i, size_t j) {
+                return frequencies[i] > frequencies[j];
+            }
         );
-        sorted.resize(std::min(n, sorted.size()));
-        return sorted;
+        std::vector<std::pair<std::string, size_t>> result;
+        result.reserve(k);
+        for (size_t i = 0; i < k; ++i) {
+            size_t idx = indices[i];
+            const auto& id = ngram_ids[idx];
+            std::string ngram;
+            for (size_t j = 0; j < id.length; ++j) {
+                if (j > 0) ngram += " ";
+                ngram += std::string(pool.get(id.word_ids[j]));
+            }
+            result.emplace_back(std::move(ngram), frequencies[idx]);
+        }
+        return result;
     }
 
-    size_t total_unique() const { return frequencies.size(); }
+    std::vector<std::pair<std::string, size_t>> get_all_sorted() const {
+        if (!finalized) {
+            throw std::runtime_error("Devi chiamare build_from_aos() prima!");
+        }
+        std::vector<size_t> indices(frequencies.size());
+        std::iota(indices.begin(), indices.end(), 0);
+        std::sort(
+            indices.begin(),
+            indices.end(),
+            [this](size_t i, size_t j) {
+                return frequencies[i] > frequencies[j];
+            }
+        );
+        std::vector<std::pair<std::string, size_t>> result;
+        result.reserve(indices.size());
+        for (size_t idx : indices) {
+            const auto& id = ngram_ids[idx];
+            std::string ngram;
+            for (size_t j = 0; j < id.length; ++j) {
+                if (j > 0) ngram += " ";
+                ngram += std::string(pool.get(id.word_ids[j]));
+            }
+            result.emplace_back(std::move(ngram), frequencies[idx]);
+        }
+        return result;
+    }
 
+    size_t total_unique() const { return ngram_ids.size(); }
     size_t total_count() const {
-        size_t total = 0;
-        for (const auto& [_, count] : frequencies) total += count;
-        return total;
-    }
-
-    const std::unordered_map<std::string, size_t>& get_frequencies() const {
-        return frequencies;
+        return std::accumulate(frequencies.begin(), frequencies.end(), 0ULL);
     }
 };
 
-// ==================== SEQUENTIAL PROCESSOR ====================
-class SequentialProcessor {
+//═══════════════════════════════════════════════════════════════
+// CSV SAVER
+//═══════════════════════════════════════════════════════════════
+class CSVSaver {
 public:
-    static void process_text_sequential(
-        const std::string& text,
-        size_t n,
-        bool use_words,
-        FrequencyCounter& counter
+    static void save_ngrams(
+        const HybridFrequencyCounter& counter,
+        const std::string& filename,
+        const std::string& label
     ) {
-        std::string normalized = Tokenizer::normalize(text, true);
-        if (use_words) {
-            auto tokens = Tokenizer::tokenize_words(normalized);
-            auto ngrams = NgramExtractor<std::string>::extract(tokens, n);
-            for (const auto& ng : ngrams)
-                counter.add_ngram(NgramExtractor<std::string>::ngram_to_string(ng));
-        } else {
-            auto tokens = Tokenizer::tokenize_chars(normalized);
-            auto ngrams = NgramExtractor<char>::extract(tokens, n);
-            for (const auto& ng : ngrams)
-                counter.add_ngram(NgramExtractor<char>::ngram_to_string(ng));
-        }
-    }
-};
-
-// ==================== STATISTICS GENERATOR ====================
-class StatisticsGenerator {
-public:
-    static void print_statistics(const FrequencyCounter& counter,
-                                const std::string& type,
-                                size_t n,
-                                size_t top_n = 20) {
-        std::cout << "\n========== " << type << " (n=" << n << ") ==========\n";
-        std::cout << "Total unique " << type << ": " << counter.total_unique() << "\n";
-        std::cout << "Total count: " << counter.total_count() << "\n\n";
-        std::cout << "Top " << top_n << " most frequent:\n";
-        auto top = counter.get_top_n(top_n);
-        for (size_t i = 0; i < top.size(); ++i) {
-            auto [ngram, freq] = top[i];
-            std::cout << (i + 1) << ". \"" << ngram << "\" - " << freq << " occurrences\n";
-        }
-    }
-
-    static void save_to_file(const FrequencyCounter& counter, const std::string& filename) {
+        auto all_ngrams = counter.get_all_sorted();
         std::ofstream out(filename);
         if (!out) {
-            std::cerr << "Errore nell'aprire il file: " << filename << "\n";
+            std::cerr << "❌ Errore apertura file: " << filename << "\n";
             return;
         }
-        auto top = counter.get_top_n(counter.total_unique());
         out << "ngram,frequency\n";
-        for (const auto& [ngram, freq] : top) {
+        for (const auto& [ngram, freq] : all_ngrams) {
             out << "\"" << ngram << "\"," << freq << "\n";
         }
-        std::cout << "Statistiche salvate in: " << filename << "\n";
+        out.close();
+        std::cout << "💾 " << label << ": " << all_ngrams.size()
+                  << " n-grams → " << filename << "\n";
     }
 };
 
-// ==================== MAIN ====================
+//═══════════════════════════════════════════════════════════════
+// SEQUENTIAL PROCESSOR - IDENTICO AL TEST
+//═══════════════════════════════════════════════════════════════
+class SequentialProcessor {
+public:
+    static void process_text_aos_optimized(
+        const std::string& text,
+        std::unordered_map<std::string, size_t>& word_bigrams,
+        std::unordered_map<std::string, size_t>& word_trigrams,
+        std::unordered_map<std::string, size_t>& char_bigrams,
+        std::unordered_map<std::string, size_t>& char_trigrams,
+        std::vector<std::string>& words_buffer,
+        std::vector<char>& chars_buffer
+    ) {
+        std::string normalized = Tokenizer::normalize(text, true);
+
+        // WORD TOKENIZATION
+        words_buffer.clear();
+        std::istringstream iss(normalized);
+        std::string word;
+        while (iss >> word) {
+            if (!word.empty()) {
+                words_buffer.push_back(std::move(word));
+            }
+        }
+
+        // WORD BIGRAMS
+        for (size_t i = 0; i + 1 < words_buffer.size(); ++i) {
+            std::string key = words_buffer[i] + " " + words_buffer[i + 1];
+            word_bigrams[key]++;
+        }
+
+        // WORD TRIGRAMS
+        for (size_t i = 0; i + 2 < words_buffer.size(); ++i) {
+            std::string key = words_buffer[i] + " " + words_buffer[i + 1] + " " + words_buffer[i + 2];
+            word_trigrams[key]++;
+        }
+
+        // CHAR TOKENIZATION
+        chars_buffer.clear();
+        for (char c : normalized) {
+            if (!std::isspace(static_cast<unsigned char>(c))) {
+                chars_buffer.push_back(c);
+            }
+        }
+
+        // CHAR BIGRAMS
+        std::string key;
+        key.resize(3);
+        for (size_t i = 0; i + 1 < chars_buffer.size(); ++i) {
+            key[0] = chars_buffer[i];
+            key[1] = ' ';
+            key[2] = chars_buffer[i + 1];
+            char_bigrams[key]++;
+        }
+
+        // CHAR TRIGRAMS
+        key.resize(5);
+        for (size_t i = 0; i + 2 < chars_buffer.size(); ++i) {
+            key[0] = chars_buffer[i];
+            key[1] = ' ';
+            key[2] = chars_buffer[i + 1];
+            key[3] = ' ';
+            key[4] = chars_buffer[i + 2];
+            char_trigrams[key]++;
+        }
+    }
+
+    static void process_sequential(
+        const std::vector<std::string>& book_files,
+        HybridFrequencyCounter& word_bigrams,
+        HybridFrequencyCounter& word_trigrams,
+        HybridFrequencyCounter& char_bigrams,
+        HybridFrequencyCounter& char_trigrams
+    ) {
+        std::unordered_map<std::string, size_t> wb_map, wt_map, cb_map, ct_map;
+        wb_map.reserve(100000);
+        wt_map.reserve(200000);
+        cb_map.reserve(50000);
+        ct_map.reserve(100000);
+
+        std::vector<std::string> words_buf;
+        std::vector<char> chars_buf;
+        words_buf.reserve(10000);
+        chars_buf.reserve(50000);
+
+        int total_books = book_files.size();
+        int progress = 0;
+
+        for (const auto& filepath : book_files) {
+            std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+            if (!file) {
+                std::cerr << "⚠️  Impossibile aprire: " << filepath << "\n";
+                continue;
+            }
+            std::streamsize size = file.tellg();
+            file.seekg(0, std::ios::beg);
+            std::string text(size, '\0');
+            if (!file.read(&text[0], size)) continue;
+
+            text = TextCleaner::clean_text(text);
+            process_text_aos_optimized(text, wb_map, wt_map, cb_map, ct_map,
+                                      words_buf, chars_buf);
+
+            progress++;
+            if (progress % 10 == 0 || progress == total_books) {
+                std::cout << "\r📖 Processati: " << progress << "/" << total_books
+                          << " libri (" << std::fixed << std::setprecision(1)
+                          << (100.0 * progress / total_books) << "%)   " << std::flush;
+            }
+        }
+        std::cout << "\n";
+
+        std::cout << "🔄 Conversione AoS → SoA...\n";
+        word_bigrams.build_from_aos(wb_map);
+        word_trigrams.build_from_aos(wt_map);
+        char_bigrams.build_from_aos(cb_map);
+        char_trigrams.build_from_aos(ct_map);
+    }
+};
+
+//═══════════════════════════════════════════════════════════════
+// MAIN
+//═══════════════════════════════════════════════════════════════
 int main() {
-    std::cout << "Sequential N-gram Analyzer for Multiple Books\n";
-    std::cout << "==============================================\n\n";
+    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║   Sequential N-gram Analyzer (Hybrid AoS/SoA)        ║\n";
+    std::cout << "║              Lorenzo Cappetti, 2025                   ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
 
     std::string folder_path = "/Users/lorenzocappetti/CLionProjects/Bigrams_Trigrams/book_gutenberg";
 
-    if (!fs::exists(folder_path) || !fs::is_directory(folder_path)) {
-        std::cerr << "Errore: cartella '" << folder_path << "' non trovata!\n";
+    if (!fs::exists(folder_path)) {
+        std::cerr << "❌ Cartella non trovata: " << folder_path << "\n";
         return 1;
     }
 
     std::vector<std::string> book_files;
     for (const auto& entry : fs::directory_iterator(folder_path)) {
-        if (entry.path().extension() == ".txt")
+        if (entry.path().extension() == ".txt") {
             book_files.push_back(entry.path().string());
+        }
     }
 
     if (book_files.empty()) {
-        std::cerr << "Nessun file .txt trovato nella cartella!\n";
+        std::cerr << "❌ Nessun file .txt trovato!\n";
         return 1;
     }
 
-    std::cout << "Trovati " << book_files.size() << " libri da processare\n\n";
+    std::cout << "📚 Trovati " << book_files.size() << " libri\n\n";
 
-    // ==================== MULTIPLE RUN BENCHMARK ====================
-    const int WARMUP_RUNS = 2;  // Prime run da scartare per warm-up CPU/cache
-    const int MEASURED_RUNS = 10;  // Run effettive da misurare
-    const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;  // Totale: 12 run
-    std::vector<double> run_times;
+    const int WARMUP_RUNS = 2;
+    const int MEASURED_RUNS = 10;
+    const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;
+
+    struct RunResult { double wall; double cpu; bool warmup; };
+    std::vector<RunResult> run_times;
     run_times.reserve(NUM_RUNS);
 
     std::cout << "🔄 Eseguendo " << NUM_RUNS << " run totali (" << WARMUP_RUNS
-              << " warm-up + " << MEASURED_RUNS
-              << " misurate) per ottenere statistiche affidabili...\n\n";
+              << " warm-up + " << MEASURED_RUNS << " misurate)...\n\n";
 
-    FrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
+    HybridFrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
     for (int run = 0; run < NUM_RUNS; ++run) {
-        // Reset dei contatori per ogni run
-        word_bigrams = FrequencyCounter();
-        word_trigrams = FrequencyCounter();
-        char_bigrams = FrequencyCounter();
-        char_trigrams = FrequencyCounter();
+        word_bigrams = HybridFrequencyCounter();
+        word_trigrams = HybridFrequencyCounter();
+        char_bigrams = HybridFrequencyCounter();
+        char_trigrams = HybridFrequencyCounter();
 
-        std::cout << "▶ Run " << std::setw(3) << (run + 1) << "/" << NUM_RUNS;
+        auto start_wall = std::chrono::high_resolution_clock::now();
+        std::clock_t start_cpu = std::clock();
+
+        SequentialProcessor::process_sequential(
+            book_files,
+            word_bigrams,
+            word_trigrams,
+            char_bigrams,
+            char_trigrams
+        );
+
+        auto end_wall = std::chrono::high_resolution_clock::now();
+        std::clock_t end_cpu = std::clock();
+
+        std::chrono::duration<double> elapsed = end_wall - start_wall;
+        double cpu_seconds = double(end_cpu - start_cpu) / double(CLOCKS_PER_SEC);
+
+        run_times.push_back(RunResult{elapsed.count(), cpu_seconds, run < WARMUP_RUNS});
+
+        std::cout << "  Run " << std::setw(2) << (run + 1) << "/" << NUM_RUNS;
         if (run < WARMUP_RUNS) {
-            std::cout << " [WARM-UP] ... ";
+            std::cout << " [WARM-UP]: ";
         } else {
-            std::cout << " ... ";
+            std::cout << ": ";
         }
-        std::cout.flush();
+        std::cout << std::fixed << std::setprecision(2) << elapsed.count()
+                  << "s (cpu: " << std::setprecision(2) << cpu_seconds << "s)\n";
+    }
 
-        auto start_time = std::chrono::high_resolution_clock::now();
-
-        for (size_t i = 0; i < book_files.size(); ++i) {
-            const auto& filepath = book_files[i];
-
-            // Lettura identica alla versione parallela (binaria)
-            std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-            if (!file) {
-                continue;
-            }
-
-            std::streamsize size = file.tellg();
-            file.seekg(0, std::ios::beg);
-            std::string text(size, '\0');
-            if (!file.read(&text[0], size)) {
-                continue;
-            }
-
-            text = TextCleaner::clean_text(text);
-
-            SequentialProcessor::process_text_sequential(text, 2, true, word_bigrams);
-            SequentialProcessor::process_text_sequential(text, 3, true, word_trigrams);
-            SequentialProcessor::process_text_sequential(text, 2, false, char_bigrams);
-            SequentialProcessor::process_text_sequential(text, 3, false, char_trigrams);
+    std::vector<double> measured_wall, measured_cpu;
+    for (const auto& r : run_times) {
+        if (!r.warmup) {
+            measured_wall.push_back(r.wall);
+            measured_cpu.push_back(r.cpu);
         }
-
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> elapsed = end_time - start_time;
-        run_times.push_back(elapsed.count());
-
-        std::cout << "completato in " << std::fixed << std::setprecision(2)
-                  << elapsed.count() << "s\n";
     }
 
-    // ==================== CALCOLO STATISTICHE (SCARTANDO WARM-UP) ====================
-    // Scarta le prime WARMUP_RUNS run per stabilizzare CPU/cache
-    std::vector<double> measured_times(run_times.begin() + WARMUP_RUNS, run_times.end());
-
-    double mean = 0.0, min_time = measured_times[0], max_time = measured_times[0];
-    for (double t : measured_times) {
-        mean += t;
-        min_time = std::min(min_time, t);
-        max_time = std::max(max_time, t);
+    double mean_wall = 0.0, min_wall = measured_wall[0], max_wall = measured_wall[0];
+    for (double t : measured_wall) {
+        mean_wall += t;
+        min_wall = std::min(min_wall, t);
+        max_wall = std::max(max_wall, t);
     }
-    mean /= measured_times.size();
+    mean_wall /= measured_wall.size();
 
-    double stddev = 0.0;
-    for (double t : measured_times) {
-        stddev += (t - mean) * (t - mean);
+    double stddev_wall = 0.0;
+    for (double t : measured_wall) {
+        stddev_wall += (t - mean_wall) * (t - mean_wall);
     }
-    stddev = std::sqrt(stddev / measured_times.size());
+    stddev_wall = std::sqrt(stddev_wall / measured_wall.size());
+    double cv_wall = (stddev_wall / mean_wall) * 100.0;
 
-    double cv = (stddev / mean) * 100.0; // Coefficiente di variazione in %
+    double mean_cpu = 0.0, min_cpu = measured_cpu[0], max_cpu = measured_cpu[0];
+    for (double t : measured_cpu) {
+        mean_cpu += t;
+        min_cpu = std::min(min_cpu, t);
+        max_cpu = std::max(max_cpu, t);
+    }
+    mean_cpu /= measured_cpu.size();
 
-    // ==================== STAMPA STATISTICHE ====================
-    std::cout << "\n";
-    std::cout << "╔═══════════════════════════════════════════════════════╗\n";
-    std::cout << "║    STATISTICHE PERFORMANCE (" << (NUM_RUNS - WARMUP_RUNS) << " run misurate)     ║\n";
-    std::cout << "╠═══════════════════════════════════════════════════════╣\n";
-    std::cout << "║ Media:              " << std::setw(30) << std::fixed << std::setprecision(3)
-              << mean << "s ║\n";
-    std::cout << "║ Minimo:             " << std::setw(30) << min_time << "s ║\n";
-    std::cout << "║ Massimo:            " << std::setw(30) << max_time << "s ║\n";
-    std::cout << "║ Deviazione Std:     " << std::setw(30) << stddev << "s ║\n";
-    std::cout << "║ Coeff. Variazione:  " << std::setw(29) << std::setprecision(2)
-              << cv << "% ║\n";
-    std::cout << "║                                                       ║\n";
-    std::cout << "║ Note: Scartate " << WARMUP_RUNS << " run di warm-up iniziali          ║\n";
-    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
+    double stddev_cpu = 0.0;
+    for (double t : measured_cpu) {
+        stddev_cpu += (t - mean_cpu) * (t - mean_cpu);
+    }
+    stddev_cpu = std::sqrt(stddev_cpu / measured_cpu.size());
+    double cv_cpu = (stddev_cpu / mean_cpu) * 100.0;
 
-    // Mostra statistiche degli n-gram (dall'ultimo run)
-    StatisticsGenerator::print_statistics(word_bigrams, "Word Bigrams", 2);
-    StatisticsGenerator::print_statistics(word_trigrams, "Word Trigrams", 3);
-    StatisticsGenerator::print_statistics(char_bigrams, "Char Bigrams", 2);
-    StatisticsGenerator::print_statistics(char_trigrams, "Char Trigrams", 3);
-
-    // ==================== SALVATAGGIO RISULTATI ====================
-    // Nota: Salviamo solo una volta dato che i risultati sono identici per ogni run.
-    // Le 100 run servono solo per ottenere statistiche affidabili sui tempi.
     std::string output_dir = "test/output_sequential";
     ensure_directory_exists(output_dir);
 
-    std::cout << "\n💾 Salvando risultati in " << output_dir << "/...\n";
-    StatisticsGenerator::save_to_file(word_bigrams, output_dir + "/word_bigrams_seq.csv");
-    StatisticsGenerator::save_to_file(word_trigrams, output_dir + "/word_trigrams_seq.csv");
-    StatisticsGenerator::save_to_file(char_bigrams, output_dir + "/char_bigrams_seq.csv");
-    StatisticsGenerator::save_to_file(char_trigrams, output_dir + "/char_trigrams_seq.csv");
+    std::string perf_report = output_dir + "/performance_report_seq.txt";
+    std::ofstream report(perf_report);
+    if (report) {
+        report << "═══════════════════════════════════════════════════════════════\n";
+        report << "  PERFORMANCE METRICS REPORT - SEQUENTIAL N-GRAM ANALYZER\n";
+        report << "  Lorenzo Cappetti, 2025\n";
+        report << "  Generato: " << __DATE__ << " " << __TIME__ << "\n";
+        report << "═══════════════════════════════════════════════════════════════\n\n";
 
-    std::cout << "\n✓ Analisi completata con successo!\n";
+        report << "1. CONFIGURAZIONE ESECUZIONE\n";
+        report << "   - Numero libri processati:  " << book_files.size() << "\n";
+        report << "   - Thread utilizzati:        1 (sequenziale)\n";
+        report << "   - Run totali:               " << NUM_RUNS << "\n";
+        report << "   - Run warm-up (scartate):   " << WARMUP_RUNS << "\n";
+        report << "   - Run misurate:             " << MEASURED_RUNS << "\n\n";
 
+        report << "2. EXECUTION TIME METRICS (Wall-Clock)\n";
+        report << "   ┌─────────────────────────────────────────────────┐\n";
+        report << "   │ Media:           " << std::setw(10) << std::fixed << std::setprecision(3)
+               << mean_wall << " s                   │\n";
+        report << "   │ Minimo:          " << std::setw(10) << min_wall << " s                   │\n";
+        report << "   │ Massimo:         " << std::setw(10) << max_wall << " s                   │\n";
+        report << "   │ Deviazione Std:  " << std::setw(10) << stddev_wall << " s                   │\n";
+        report << "   │ Coeff. Variaz.:  " << std::setw(9) << std::setprecision(2)
+               << cv_wall << " %                    │\n";
+        report << "   └─────────────────────────────────────────────────┘\n\n";
+
+        report << "3. CPU TIME METRICS\n";
+        report << "   ┌─────────────────────────────────────────────────┐\n";
+        report << "   │ Media:           " << std::setw(10) << std::fixed << std::setprecision(3)
+               << mean_cpu << " s                   │\n";
+        report << "   │ Minimo:          " << std::setw(10) << min_cpu << " s                   │\n";
+        report << "   │ Massimo:         " << std::setw(10) << max_cpu << " s                   │\n";
+        report << "   │ Deviazione Std:  " << std::setw(10) << stddev_cpu << " s                   │\n";
+        report << "   │ Coeff. Variaz.:  " << std::setw(9) << std::setprecision(2)
+               << cv_cpu << " %                    │\n";
+        report << "   └─────────────────────────────────────────────────┘\n\n";
+
+        report << "4. DETTAGLIO RUN INDIVIDUALI\n";
+        report << "   Run  Warmup  Wall-Time(s)  CPU-Time(s)  Delta(%)\n";
+        report << "   ───  ──────  ────────────  ───────────  ────────\n";
+        for (size_t i = 0; i < run_times.size(); ++i) {
+            double delta = (run_times[i].wall - run_times[i].cpu) / run_times[i].wall * 100.0;
+            report << "   " << std::setw(3) << (i+1) << "    "
+                   << (run_times[i].warmup ? "YES" : " NO") << "    "
+                   << std::setw(10) << std::fixed << std::setprecision(3) << run_times[i].wall << "    "
+                   << std::setw(10) << run_times[i].cpu << "    "
+                   << std::setw(6) << std::setprecision(1) << delta << "\n";
+        }
+        report << "\n";
+
+        report << "5. STABILITÀ E AFFIDABILITÀ\n";
+        report << "   - Variabilità wall-clock:  ";
+        if (cv_wall < 2.0) report << "ECCELLENTE (< 2%)\n";
+        else if (cv_wall < 5.0) report << "BUONA (< 5%)\n";
+        else if (cv_wall < 10.0) report << "ACCETTABILE (< 10%)\n";
+        else report << "ALTA (≥ 10%)\n";
+
+        report << "   - Variabilità CPU-time:    ";
+        if (cv_cpu < 2.0) report << "ECCELLENTE (< 2%)\n";
+        else if (cv_cpu < 5.0) report << "BUONA (< 5%)\n";
+        else if (cv_cpu < 10.0) report << "ACCETTABILE (< 10%)\n";
+        else report << "ALTA (≥ 10%)\n\n";
+
+        report << "6. RISULTATI N-GRAM\n";
+        report << "   - Word Bigrams:   " << word_bigrams.total_unique() << " unique\n";
+        report << "   - Word Trigrams:  " << word_trigrams.total_unique() << " unique\n";
+        report << "   - Char Bigrams:   " << char_bigrams.total_unique() << " unique\n";
+        report << "   - Char Trigrams:  " << char_trigrams.total_unique() << " unique\n\n";
+
+        report << "7. NOTE\n";
+        report << "   - Le prime " << WARMUP_RUNS << " run sono state scartate per warm-up CPU/cache\n";
+        report << "   - Tutte le statistiche sono calcolate solo sulle " << MEASURED_RUNS << " run misurate\n";
+        report << "   - Delta(%) = differenza percentuale tra wall-time e CPU-time\n";
+        report << "   - Un Delta elevato indica overhead I/O o sistema\n\n";
+
+        report << "═══════════════════════════════════════════════════════════════\n";
+        report.close();
+        std::cout << "📊 Report performance salvato: " << perf_report << "\n";
+    } else {
+        std::cerr << "⚠️  Impossibile salvare report performance\n";
+    }
+
+    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║    STATISTICHE PERFORMANCE (" << MEASURED_RUNS << " run misurate)       ║\n";
+    std::cout << "╠═══════════════════════════════════════════════════════╣\n";
+    std::cout << "║ WALL-CLOCK TIME                                       ║\n";
+    std::cout << "║   Media:          " << std::setw(10) << std::fixed << std::setprecision(3)
+              << mean_wall << " s                        ║\n";
+    std::cout << "║   Minimo:         " << std::setw(10) << min_wall << " s                        ║\n";
+    std::cout << "║   Massimo:        " << std::setw(10) << max_wall << " s                        ║\n";
+    std::cout << "║   Dev. Standard:  " << std::setw(10) << stddev_wall << " s                        ║\n";
+    std::cout << "║   Coeff. Variaz.: " << std::setw(9) << std::setprecision(2) << cv_wall << " %                         ║\n";
+    std::cout << "║                                                       ║\n";
+    std::cout << "║ CPU TIME                                              ║\n";
+    std::cout << "║   Media:          " << std::setw(10) << std::fixed << std::setprecision(3)
+              << mean_cpu << " s                        ║\n";
+    std::cout << "║   Minimo:         " << std::setw(10) << min_cpu << " s                        ║\n";
+    std::cout << "║   Massimo:        " << std::setw(10) << max_cpu << " s                        ║\n";
+    std::cout << "║   Dev. Standard:  " << std::setw(10) << stddev_cpu << " s                        ║\n";
+    std::cout << "║   Coeff. Variaz.: " << std::setw(9) << std::setprecision(2) << cv_cpu << " %                         ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
+
+    // Mostra risultati nel formato che il test si aspetta
+    auto top_wb = word_bigrams.get_top_n(20);
+    auto top_wt = word_trigrams.get_top_n(20);
+    auto top_cb = char_bigrams.get_top_n(20);
+    auto top_ct = char_trigrams.get_top_n(20);
+
+    std::cout << "\n╔════════════════════════════════════════════════════╗\n";
+    std::cout << "║ " << std::left << std::setw(50) << "Word Bigrams (n=2)" << " ║\n";
+    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "║ Total unique: " << std::setw(35) << word_bigrams.total_unique() << " ║\n";
+    std::cout << "║ Total count:  " << std::setw(35) << word_bigrams.total_count() << " ║\n";
+    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+
+    std::cout << "Top 20 most frequent:\n";
+    for (size_t i = 0; i < top_wb.size(); ++i) {
+        std::cout << std::setw(3) << (i + 1) << ". "
+                  << std::left << std::setw(30) << ("\"" + top_wb[i].first + "\"")
+                  << std::right << std::setw(10) << top_wb[i].second << " occurrences\n";
+    }
+
+    std::cout << "\n╔════════════════════════════════════════════════════╗\n";
+    std::cout << "║ " << std::left << std::setw(50) << "Word Trigrams (n=3)" << " ║\n";
+    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "║ Total unique: " << std::setw(35) << word_trigrams.total_unique() << " ║\n";
+    std::cout << "║ Total count:  " << std::setw(35) << word_trigrams.total_count() << " ║\n";
+    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+
+    std::cout << "Top 20 most frequent:\n";
+    for (size_t i = 0; i < top_wt.size(); ++i) {
+        std::cout << std::setw(3) << (i + 1) << ". "
+                  << std::left << std::setw(30) << ("\"" + top_wt[i].first + "\"")
+                  << std::right << std::setw(10) << top_wt[i].second << " occurrences\n";
+    }
+
+    std::cout << "\n╔════════════════════════════════════════════════════╗\n";
+    std::cout << "║ " << std::left << std::setw(50) << "Char Bigrams (n=2)" << " ║\n";
+    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "║ Total unique: " << std::setw(35) << char_bigrams.total_unique() << " ║\n";
+    std::cout << "║ Total count:  " << std::setw(35) << char_bigrams.total_count() << " ║\n";
+    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+
+    std::cout << "Top 20 most frequent:\n";
+    for (size_t i = 0; i < top_cb.size(); ++i) {
+        std::cout << std::setw(3) << (i + 1) << ". "
+                  << std::left << std::setw(30) << ("\"" + top_cb[i].first + "\"")
+                  << std::right << std::setw(10) << top_cb[i].second << " occurrences\n";
+    }
+
+    std::cout << "\n╔════════════════════════════════════════════════════╗\n";
+    std::cout << "║ " << std::left << std::setw(50) << "Char Trigrams (n=3)" << " ║\n";
+    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "║ Total unique: " << std::setw(35) << char_trigrams.total_unique() << " ║\n";
+    std::cout << "║ Total count:  " << std::setw(35) << char_trigrams.total_count() << " ║\n";
+    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+
+    std::cout << "Top 20 most frequent:\n";
+    for (size_t i = 0; i < top_ct.size(); ++i) {
+        std::cout << std::setw(3) << (i + 1) << ". "
+                  << std::left << std::setw(30) << ("\"" + top_ct[i].first + "\"")
+                  << std::right << std::setw(10) << top_ct[i].second << " occurrences\n";
+    }
+
+    std::cout << "\n💾 Salvando risultati in " << output_dir << "/\n";
+
+    CSVSaver::save_ngrams(word_bigrams, output_dir + "/word_bigrams.csv", "Word Bigrams");
+    CSVSaver::save_ngrams(word_trigrams, output_dir + "/word_trigrams.csv", "Word Trigrams");
+    CSVSaver::save_ngrams(char_bigrams, output_dir + "/char_bigrams.csv", "Char Bigrams");
+    CSVSaver::save_ngrams(char_trigrams, output_dir + "/char_trigrams.csv", "Char Trigrams");
+
+    std::cout << "\n✅ Completato!\n\n";
     return 0;
 }

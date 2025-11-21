@@ -16,10 +16,11 @@
 #include <iomanip>
 #include <numeric>
 #include <cmath>
+#include <ctime>
 
 namespace fs = std::filesystem;
 
-//═══════════════════════════════════════════════════════════════
+//═══════════════════════════════���═══════════════════════════════
 // UTILITY FUNCTIONS
 //═══════════════════════════════════════════════════════════════
 
@@ -234,7 +235,7 @@ public:
 // Arena allocator per string interning: memorizza ogni parola unica
 // una sola volta e assegna un ID numerico. Riduce uso memoria e
 // velocizza confronti (confronto di size_t invece di std::string).
-//═══════════════════════════════════════════════════════════════
+//════════════��══════════════════════════════════════════════════
 class OptimizedStringPool {
 private:
     std::vector<char> arena;                                  // Buffer contiguo per tutte le stringhe
@@ -287,12 +288,12 @@ public:
     size_t size() const { return id_to_word.size(); }
 };
 
-//═══════════════════════════════════════════════════════════════
+//═══════════════════════���═══════════════════════���═══════════════
 // NGRAM ID
 // Rappresenta un n-gram come array di ID di parole (invece di stringhe).
 // Dimensione fissa: massimo 3 parole (per trigrammi).
 // Nessuna allocazione dinamica → molto più veloce.
-//═══════════════════════════════════════════════════════════════
+//═══════════════════════════════���═══════════════════════════════
 struct NgramID {
     size_t word_ids[3];  // Array fisso di ID parole (max 3 per trigrammi)
     size_t length;       // Lunghezza effettiva (2 per bigrammi, 3 per trigrammi)
@@ -330,7 +331,7 @@ struct NgramIDHash {
 // Struttura dati ibrida:
 //   - Fase di BUILD (AoS): converte da unordered_map<string, size_t>
 //   - Fase di QUERY (SoA): array paralleli per cache locality ottimale
-//═══════════════════════════════════════════════════════════════
+//═══════════════════════════════════════════════���═══════════════
 class HybridFrequencyCounter {
 private:
     OptimizedStringPool pool;           // Pool condiviso per string interning
@@ -481,7 +482,7 @@ public:
     }
 };
 
-//═══════════════════════════════════════════════════════════════
+//═══════════════════════════════���═══════════════════════════════
 // CSV SAVER
 // Salva i risultati in formato CSV
 //═══════════════════════════════════════════════════════════════
@@ -526,7 +527,7 @@ public:
 //   1. PHASE 1: Processing parallelo (ogni thread ha la sua AoS map)
 //   2. PHASE 2: Merge parallelo delle map (merge tree)
 //   3. PHASE 3: Conversione AoS → SoA parallela (#pragma omp sections)
-//═══════════════════════════════════════════════════════════════
+//═══════════════════════════════���═══════════════════════���═══════
 class OptimizedOpenMPProcessor {
 public:
     /**
@@ -798,11 +799,11 @@ public:
     }
 };
 
-//═══════════════════════════════════════════════════════════════
+//═══════════════════════���═══════════════════════════════════════
 // MAIN
 //═══════════════════════════════════════════════════════════════
 int main() {
-    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "\n╔═══════════════════════════════════════════════���═══════╗\n";
     std::cout << "║   Hybrid AoS/SoA N-gram Analyzer (ULTRA-OPTIMIZED)   ║\n";
     std::cout << "║              Lorenzo Cappetti, 2025                   ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
@@ -847,7 +848,7 @@ int main() {
         }
 
         if (num_threads < 1 || num_threads > MAX_VIRTUAL_THREADS) {
-            std::cout << "⚠️  Fuori range! Inserisci un valore tra 1 e " << MAX_VIRTUAL_THREADS << ": ";
+            std::cout << "⚠️  Fuori range! Inserisci un valore tra 1 e " << MAX_VIRTUAL_THREADS << " : ";
             continue;
         }
 
@@ -863,7 +864,9 @@ int main() {
     const int WARMUP_RUNS = 2;  // Prime run da scartare per warm-up CPU/cache
     const int MEASURED_RUNS = 10;  // Run effettive da misurare
     const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;  // Totale: 12 run
-    std::vector<double> run_times;
+
+    struct RunResult { double wall; double cpu; bool warmup; };
+    std::vector<RunResult> run_times;
     run_times.reserve(NUM_RUNS);
 
     std::cout << "🔄 Eseguendo " << NUM_RUNS << " run totali (" << WARMUP_RUNS
@@ -878,6 +881,7 @@ int main() {
         char_trigrams = HybridFrequencyCounter();
 
         auto start_time = std::chrono::high_resolution_clock::now();
+        std::clock_t start_cpu = std::clock();
 
         OptimizedOpenMPProcessor::process_parallel_hybrid(
             book_files,
@@ -889,8 +893,11 @@ int main() {
         );
 
         auto end_time = std::chrono::high_resolution_clock::now();
+        std::clock_t end_cpu = std::clock();
         std::chrono::duration<double> elapsed = end_time - start_time;
-        run_times.push_back(elapsed.count());
+        double cpu_seconds = double(end_cpu - start_cpu) / double(CLOCKS_PER_SEC);
+
+        run_times.push_back(RunResult{elapsed.count(), cpu_seconds, run < WARMUP_RUNS});
 
         std::cout << "  Run " << std::setw(2) << (run + 1) << "/" << NUM_RUNS;
         if (run < WARMUP_RUNS) {
@@ -898,12 +905,19 @@ int main() {
         } else {
             std::cout << ": ";
         }
-        std::cout << std::fixed << std::setprecision(2) << elapsed.count() << "s\n";
+        std::cout << std::fixed << std::setprecision(2) << elapsed.count()
+                  << "s (cpu: " << cpu_seconds << "s)\n";
     }
 
     // ==================== CALCOLO STATISTICHE (SCARTANDO WARM-UP) ====================
-    // Scarta le prime WARMUP_RUNS run per stabilizzare CPU/cache
-    std::vector<double> measured_times(run_times.begin() + WARMUP_RUNS, run_times.end());
+    std::vector<double> measured_times;
+    std::vector<double> measured_cpu;
+    for (const auto& r : run_times) {
+        if (!r.warmup) {
+            measured_times.push_back(r.wall);
+            measured_cpu.push_back(r.cpu);
+        }
+    }
 
     double mean = 0.0, min_time = measured_times[0], max_time = measured_times[0];
     for (double t : measured_times) {
@@ -918,8 +932,113 @@ int main() {
         stddev += (t - mean) * (t - mean);
     }
     stddev = std::sqrt(stddev / measured_times.size());
-
     double cv = (stddev / mean) * 100.0;
+
+    double mean_cpu = 0.0, min_cpu = measured_cpu[0], max_cpu = measured_cpu[0];
+    for (double t : measured_cpu) {
+        mean_cpu += t;
+        min_cpu = std::min(min_cpu, t);
+        max_cpu = std::max(max_cpu, t);
+    }
+    mean_cpu /= measured_cpu.size();
+
+    double stddev_cpu = 0.0;
+    for (double t : measured_cpu) stddev_cpu += (t - mean_cpu) * (t - mean_cpu);
+    stddev_cpu = std::sqrt(stddev_cpu / measured_cpu.size());
+    double cv_cpu = (stddev_cpu / mean_cpu) * 100.0;
+
+    // ==================== SALVA REPORT PERFORMANCE SU FILE ====================
+    std::string output_dir = "test/output_hybrid";
+    ensure_directory_exists(output_dir);
+
+    std::string perf_report = output_dir + "/performance_report_hybrid_T" + std::to_string(num_threads) + ".txt";
+    std::ofstream report_file(perf_report);
+    if (report_file) {
+        report_file << "═══════════════════════════════════════════════════════���═══════\n";
+        report_file << "  PERFORMANCE METRICS REPORT - HYBRID AoS/SoA ANALYZER\n";
+        report_file << "  Lorenzo Cappetti, 2025\n";
+        report_file << "  Generato: " << __DATE__ << " " << __TIME__ << "\n";
+        report_file << "═══════════════════════════════════════════════���═══════════════\n\n";
+
+        report_file << "1. CONFIGURAZIONE ESECUZIONE\n";
+        report_file << "   - Numero libri processati:  " << book_files.size() << "\n";
+        report_file << "   - Thread utilizzati:        " << num_threads << "\n";
+        report_file << "   - Thread fisici disponibili:" << max_threads << "\n";
+        report_file << "   - Run totali:               " << NUM_RUNS << "\n";
+        report_file << "   - Run warm-up (scartate):   " << WARMUP_RUNS << "\n";
+        report_file << "   - Run misurate:             " << MEASURED_RUNS << "\n";
+        report_file << "   - Versione:                 Hybrid AoS/SoA (ULTRA-OPTIMIZED)\n\n";
+
+        report_file << "2. EXECUTION TIME METRICS (Wall-Clock)\n";
+        report_file << "   ┌─────────────────────────────────────────────────┐\n";
+        report_file << "   │ Media:           " << std::setw(10) << std::fixed << std::setprecision(3)
+               << mean << " s                   │\n";
+        report_file << "   │ Minimo:          " << std::setw(10) << min_time << " s                   │\n";
+        report_file << "   │ Massimo:         " << std::setw(10) << max_time << " s                   │\n";
+        report_file << "   │ Deviazione Std:  " << std::setw(10) << stddev << " s                   │\n";
+        report_file << "   │ Coeff. Variaz.:  " << std::setw(9) << std::setprecision(2)
+               << cv << " %                    │\n";
+        report_file << "   └─────────────────────────────────────────────────┘\n\n";
+
+        report_file << "3. CPU TIME METRICS (somma di tutti i thread)\n";
+        report_file << "   ┌─────────────────────────────────────────────────┐\n";
+        report_file << "   │ Media:           " << std::setw(10) << std::fixed << std::setprecision(3)
+               << mean_cpu << " s                   │\n";
+        report_file << "   │ Minimo:          " << std::setw(10) << min_cpu << " s                   │\n";
+        report_file << "   │ Massimo:         " << std::setw(10) << max_cpu << " s                   │\n";
+        report_file << "   │ Deviazione Std:  " << std::setw(10) << stddev_cpu << " s                   │\n";
+        report_file << "   │ Coeff. Variaz.:  " << std::setw(9) << std::setprecision(2)
+               << cv_cpu << " %                    │\n";
+        report_file << "   └─────────────────────────────────────────────────┘\n\n";
+
+        double parallelism_ratio = mean_cpu / mean;
+        report_file << "4. PARALLELISMO E EFFICIENZA\n";
+        report_file << "   - Parallelism ratio (CPU/Wall):  " << std::fixed << std::setprecision(2)
+               << parallelism_ratio << "x\n";
+        report_file << "   - Efficienza parallela:          " << std::setprecision(1)
+               << (parallelism_ratio / num_threads * 100.0) << "%\n";
+        report_file << "   - Speedup teorico massimo:       " << num_threads << "x\n";
+        report_file << "   - Speedup effettivo (vs seq):    da calcolare dopo run sequenziale\n\n";
+
+        report_file << "5. DETTAGLIO RUN INDIVIDUALI\n";
+        report_file << "   Run  Warmup  Wall-Time(s)  CPU-Time(s)  Parallel-Ratio\n";
+        report_file << "   ───  ──────  ────────────  ───────────  ──────────────\n";
+        for (size_t i = 0; i < run_times.size(); ++i) {
+            double ratio = run_times[i].cpu / run_times[i].wall;
+            report_file << "   " << std::setw(3) << (i+1) << "    "
+                   << (run_times[i].warmup ? "YES" : " NO") << "    "
+                   << std::setw(10) << std::fixed << std::setprecision(3) << run_times[i].wall << "    "
+                   << std::setw(10) << run_times[i].cpu << "      "
+                   << std::setw(6) << std::setprecision(2) << ratio << "x\n";
+        }
+        report_file << "\n";
+
+        report_file << "6. STABILITÀ E AFFIDABILITÀ\n";
+        report_file << "   - Variabilità wall-clock:  ";
+        if (cv < 2.0) report_file << "ECCELLENTE (< 2%)\n";
+        else if (cv < 5.0) report_file << "BUONA (< 5%)\n";
+        else if (cv < 10.0) report_file << "ACCETTABILE (< 10%)\n";
+        else report_file << "ALTA (≥ 10%)\n";
+
+        report_file << "   - Variabilità CPU-time:    ";
+        if (cv_cpu < 2.0) report_file << "ECCELLENTE (< 2%)\n";
+        else if (cv_cpu < 5.0) report_file << "BUONA (< 5%)\n";
+        else if (cv_cpu < 10.0) report_file << "ACCETTABILE (< 10%)\n";
+        else report_file << "ALTA (≥ 10%)\n\n";
+
+        report_file << "7. NOTE\n";
+        report_file << "   - Le prime " << WARMUP_RUNS << " run sono state scartate per warm-up CPU/cache\n";
+        report_file << "   - Tutte le statistiche sono calcolate solo sulle " << MEASURED_RUNS << " run misurate\n";
+        report_file << "   - CPU time è la somma del tempo di tutti i thread (misurato con std::clock)\n";
+        report_file << "   - Parallel-Ratio = CPU-time / Wall-time (ideale = num_threads)\n";
+        report_file << "   - Versione Hybrid: usa AoS per build, SoA per query (massima efficienza)\n\n";
+
+        report_file << "═══════════════════════════════════════════════════════════════\n";
+        report_file.close();
+        std::cout << "📊 Report performance salvato: " << perf_report << "\n";
+    } else {
+        std::cerr << "⚠️  Impossibile salvare report performance\n";
+    }
 
     std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
     std::cout << "║    STATISTICHE PERFORMANCE (" << (NUM_RUNS - WARMUP_RUNS) << " run misurate)      ║\n";
@@ -933,7 +1052,7 @@ int main() {
               << cv << "% ║\n";
     std::cout << "║                                                       ║\n";
     std::cout << "║ Note: Scartate " << WARMUP_RUNS << " run di warm-up iniziali          ║\n";
-    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
+    std::cout << "╚═══════════════════════���═══════════════════════════════╝\n";
 
     std::cout << "\n📊 Query risultati (SoA)...\n";
     auto query_start = std::chrono::high_resolution_clock::now();
@@ -948,10 +1067,10 @@ int main() {
 
     std::cout << "\n╔════════════════════════════════════════════════════╗\n";
     std::cout << "║ " << std::left << std::setw(50) << "Word Bigrams (n=2)" << " ║\n";
-    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "╠═══════════════════════════════════════���════════════╣\n";
     std::cout << "║ Total unique: " << std::setw(35) << word_bigrams.total_unique() << " ║\n";
     std::cout << "║ Total count:  " << std::setw(35) << word_bigrams.total_count() << " ║\n";
-    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+    std::cout << "╚═══════════════════════════════════════════════���════╝\n\n";
 
     std::cout << "Top 20 most frequent:\n";
     for (size_t i = 0; i < top_wb.size(); ++i) {
@@ -960,12 +1079,12 @@ int main() {
                   << std::right << std::setw(10) << top_wb[i].second << " occurrences\n";
     }
 
-    std::cout << "\n╔════════════════════════════════════════════════════╗\n";
+    std::cout << "\n╔═══════════════════════════════════════════════���════╗\n";
     std::cout << "║ " << std::left << std::setw(50) << "Word Trigrams (n=3)" << " ║\n";
-    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "╠═══════════════════════���════════════════════════════╣\n";
     std::cout << "║ Total unique: " << std::setw(35) << word_trigrams.total_unique() << " ║\n";
     std::cout << "║ Total count:  " << std::setw(35) << word_trigrams.total_count() << " ║\n";
-    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+    std::cout << "╚═══════════════════════════════════════════════���════╝\n\n";
 
     std::cout << "Top 20 most frequent:\n";
     for (size_t i = 0; i < top_wt.size(); ++i) {
@@ -974,12 +1093,12 @@ int main() {
                   << std::right << std::setw(10) << top_wt[i].second << " occurrences\n";
     }
 
-    std::cout << "\n╔════════════════════════════════════════════════════╗\n";
+    std::cout << "\n╔════════════════��══════════════════════════════���════╗\n";
     std::cout << "║ " << std::left << std::setw(50) << "Char Bigrams (n=2)" << " ║\n";
-    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "╠═══════════════════════════════════════���════════════╣\n";
     std::cout << "║ Total unique: " << std::setw(35) << char_bigrams.total_unique() << " ║\n";
     std::cout << "║ Total count:  " << std::setw(35) << char_bigrams.total_count() << " ║\n";
-    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+    std::cout << "╚═══════════════════════════════════════════════���════╝\n\n";
 
     std::cout << "Top 20 most frequent:\n";
     for (size_t i = 0; i < top_cb.size(); ++i) {
@@ -990,10 +1109,10 @@ int main() {
 
     std::cout << "\n╔════════════════════════════════════════════════════╗\n";
     std::cout << "║ " << std::left << std::setw(50) << "Char Trigrams (n=3)" << " ║\n";
-    std::cout << "╠════════════════════════════════════════════════════╣\n";
+    std::cout << "╠═══════════════════════════════════════���════════════╣\n";
     std::cout << "║ Total unique: " << std::setw(35) << char_trigrams.total_unique() << " ║\n";
     std::cout << "║ Total count:  " << std::setw(35) << char_trigrams.total_count() << " ║\n";
-    std::cout << "╚════════════════════════════════════════════════════╝\n\n";
+    std::cout << "╚═══════════════════════════════════════════════���════╝\n\n";
 
     std::cout << "Top 20 most frequent:\n";
     for (size_t i = 0; i < top_ct.size(); ++i) {
@@ -1002,19 +1121,16 @@ int main() {
                   << std::right << std::setw(10) << top_ct[i].second << " occurrences\n";
     }
 
-    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "\n╔═══════════════════════════════════════════════���═══════╗\n";
     std::cout << "║           PERFORMANCE SUMMARY (ULTRA-OPTIMIZED)       ║\n";
     std::cout << "╠═══════════════════════════════════════════════════════╣\n";
-    std::cout << "║ Tempo medio (" << NUM_RUNS << " run): " << std::setw(22) << std::fixed
+    std::cout << "║ Tempo medio (" << MEASURED_RUNS << " run): " << std::setw(22) << std::fixed
               << std::setprecision(2) << mean << "s ║\n";
     std::cout << "║ Query time (SoA):       " << std::setw(22)
               << (query_time.count() * 1000) << "ms ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
 
-    // Salvataggio risultati
-    std::string output_dir = "test/output_hybrid";
-    ensure_directory_exists(output_dir);
-
+    // Salvataggio risultati (output_dir già definito sopra)
     std::cout << "💾 Salvando risultati in " << output_dir << "/\n";
 
     CSVSaver::save_ngrams(word_bigrams, output_dir + "/word_bigrams.csv", "Word Bigrams");
