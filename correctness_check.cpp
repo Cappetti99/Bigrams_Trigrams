@@ -177,15 +177,15 @@ private:
 
 public:
     static void check_correctness(
-        const std::string& seq_dir = "output_sequential",
-        const std::string& par_dir = "output_parallel",
+        const std::string& seq_dir = "test/output_sequential",
+        const std::string& par_dir = "test/output_hybrid",
         bool verbose = true
     ) {
         std::cout << "\n";
-        std::cout << "╔═══════════════════════════════════════════════════════╗\n";
-        std::cout << "║           CORRECTNESS CHECK ANALYZER                  ║\n";
-        std::cout << "║           Confronto SEQ vs PARALLEL                   ║\n";
-        std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
+        std::cout << "\n";
+        std::cout << "CORRECTNESS CHECK ANALYZER\n";
+        std::cout << "Confronto SEQ vs PARALLEL\n";
+        std::cout << "=========================\n\n";
 
         // Verifica che entrambe le directory esistano
         if (!fs::exists(seq_dir)) {
@@ -197,28 +197,28 @@ public:
             return;
         }
 
-        std::cout << "📂 Sequential output: " << seq_dir << "/\n";
-        std::cout << "📂 Parallel output:   " << par_dir << "/\n\n";
+        std::cout << "Sequential output: " << seq_dir << "/\n";
+        std::cout << "Parallel output:   " << par_dir << "/\n\n";
 
         // Carica tutti i CSV
-        std::cout << "📥 Caricamento files CSV...\n\n";
+        std::cout << "Caricamento files CSV...\n\n";
 
-        auto seq_wb = CSVReader::read_csv(seq_dir + "/word_bigrams_seq.csv");
-        auto par_wb = CSVReader::read_csv(par_dir + "/word_bigrams_par.csv");
+        auto seq_wb = CSVReader::read_csv(seq_dir + "/word_bigrams.csv");
+        auto par_wb = CSVReader::read_csv(par_dir + "/word_bigrams.csv");
 
-        auto seq_wt = CSVReader::read_csv(seq_dir + "/word_trigrams_seq.csv");
-        auto par_wt = CSVReader::read_csv(par_dir + "/word_trigrams_par.csv");
+        auto seq_wt = CSVReader::read_csv(seq_dir + "/word_trigrams.csv");
+        auto par_wt = CSVReader::read_csv(par_dir + "/word_trigrams.csv");
 
-        auto seq_cb = CSVReader::read_csv(seq_dir + "/char_bigrams_seq.csv");
-        auto par_cb = CSVReader::read_csv(par_dir + "/char_bigrams_par.csv");
+        auto seq_cb = CSVReader::read_csv(seq_dir + "/char_bigrams.csv");
+        auto par_cb = CSVReader::read_csv(par_dir + "/char_bigrams.csv");
 
-        auto seq_ct = CSVReader::read_csv(seq_dir + "/char_trigrams_seq.csv");
-        auto par_ct = CSVReader::read_csv(par_dir + "/char_trigrams_par.csv");
+        auto seq_ct = CSVReader::read_csv(seq_dir + "/char_trigrams.csv");
+        auto par_ct = CSVReader::read_csv(par_dir + "/char_trigrams.csv");
 
         // Confronta
         std::vector<ComparisonResult> results;
 
-        std::cout << "🔍 Analisi in corso...\n\n";
+        std::cout << "Analisi in corso...\n\n";
 
         results.push_back(compare_maps(seq_wb, par_wb, "Word Bigrams", verbose));
         results.push_back(compare_maps(seq_wt, par_wt, "Word Trigrams", verbose));
@@ -226,69 +226,50 @@ public:
         results.push_back(compare_maps(seq_ct, par_ct, "Char Trigrams", verbose));
 
         // Stampa risultati
-        std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
-        std::cout << "║                  RISULTATI CONFRONTO                  ║\n";
-        std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
+        std::cout << "                  CONFRONTO DEI RISULTATI                  \n";
 
         bool all_correct = true;
 
         for (const auto& res : results) {
-            std::cout << "┌─────────────────────────────────────────────────────┐\n";
-            std::cout << "│ " << std::left << std::setw(51) << res.name << " │\n";
-            std::cout << "├─────────────────────────────────────────────────────┤\n";
+            std::cout << "-----------------------------------------------------\n";
+            std::cout << "| " << std::left << std::setw(51) << res.name << " |\n";
+            std::cout << "-----------------------------------------------------\n";
 
             // Statistiche base
-            std::cout << "│ Unique ngrams (seq):  " << std::right << std::setw(27)
-                      << res.seq_unique << " │\n";
-            std::cout << "│ Unique ngrams (par):  " << std::right << std::setw(27)
-                      << res.par_unique << " │\n";
-            std::cout << "│ Total count (seq):    " << std::right << std::setw(27)
-                      << res.seq_total << " │\n";
-            std::cout << "│ Total count (par):    " << std::right << std::setw(27)
-                      << res.par_total << " │\n";
-            std::cout << "├─────────────────────────────────────────────────────┤\n";
+            std::cout << "| Unique (seq/par): " << std::right << std::setw(10) << res.seq_unique << " / " << std::setw(10) << res.par_unique << " |\n";
+            std::cout << "| Total  (seq/par): " << std::right << std::setw(10) << res.seq_total << " / " << std::setw(10) << res.par_total << " |\n";
+            std::cout << "-----------------------------------------------------\n";
 
             // Confronto
-            std::cout << "│ Matches perfetti:     " << std::right << std::setw(27)
-                      << res.matches << " │\n";
-            std::cout << "│ Freq. mismatches:     " << std::right << std::setw(27)
-                      << res.freq_mismatches << " │\n";
-            std::cout << "│ Solo in seq:          " << std::right << std::setw(27)
-                      << res.only_in_seq << " │\n";
-            std::cout << "│ Solo in par:          " << std::right << std::setw(27)
-                      << res.only_in_par << " │\n";
-            std::cout << "├─────────────────────────────────────────────────────┤\n";
+            std::cout << "| Matches:          " << std::right << std::setw(27) << res.matches << " |\n";
+            std::cout << "| Mismatches:       " << std::right << std::setw(27) << res.freq_mismatches << " |\n";
+            std::cout << "| Only in seq/par:  " << std::right << std::setw(10) << res.only_in_seq << " / " << std::setw(10) << res.only_in_par << " |\n";
+            std::cout << "-----------------------------------------------------\n";
 
             // Accuracy
-            std::cout << "│ Accuracy:             " << std::right << std::setw(23) << std::fixed
-                      << std::setprecision(4) << res.accuracy_percent << " %  │\n";
+            std::cout << "| Accuracy:             " << std::right << std::setw(23) << std::fixed
+                      << std::setprecision(4) << res.accuracy_percent << " %  |\n";
 
             // Status
-            std::cout << "│ Status:               ";
+            std::cout << "| Status:               ";
             if (res.is_correct) {
-                std::cout << "\033[32m" << std::setw(27) << "✓ CORRETTO" << "\033[0m │\n";
+                std::cout << "\033[32m" << std::setw(27) << "OK" << "\033[0m |\n";
             } else {
-                std::cout << "\033[31m" << std::setw(27) << "✗ ERRORI" << "\033[0m │\n";
+                std::cout << "\033[31m" << std::setw(27) << "ERROR" << "\033[0m |\n";
                 all_correct = false;
             }
 
-            std::cout << "└─────────────────────────────────────────────────────┘\n\n";
+            std::cout << "-----------------------------------------------------\n\n";
         }
 
-        // Riepilogo finale
-        std::cout << "╔═══════════════════════════════════════════════════════╗\n";
         if (all_correct) {
-            std::cout << "║        ✓✓✓ CORRECTNESS CHECK PASSED ✓✓✓               ║\n";
-            std::cout << "║                                                       ║\n";
-            std::cout << "║   La versione parallela produce risultati IDENTICI    ║\n";
-            std::cout << "║              alla versione sequenziale!               ║\n";
+            std::cout << "[SUCCESS] CORRECTNESS CHECK PASSED\n";
+            std::cout << "La versione parallela produce risultati IDENTICI alla versione sequenziale!\n";
         } else {
-            std::cout << "║        ❌❌❌ CORRECTNESS CHECK FAILED ❌❌❌             ║\n";
-            std::cout << "║                                                       ║\n";
-            std::cout << "║     Trovate DIFFERENZE tra seq e parallel!            ║\n";
-            std::cout << "║     Verificare la logica di normalizzazione           ║\n";
+            std::cout << "[FAILED] CORRECTNESS CHECK FAILED\n";
+            std::cout << "Trovate DIFFERENZE tra seq e parallel!\n";
         }
-        std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
+        std::cout << "\n";
 
         // Statistiche aggregate
         size_t total_matches = 0;
@@ -316,8 +297,8 @@ public:
 
 // ==================== MAIN ====================
 int main(int argc, char* argv[]) {
-    std::string seq_dir = "output_sequential";
-    std::string par_dir = "output_parallel";
+    std::string seq_dir = "test/output_sequential";
+    std::string par_dir = "test/output_hybrid";
     bool verbose = true;
 
     // Opzionale: parsing argomenti da linea di comando
@@ -333,4 +314,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
