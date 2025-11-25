@@ -42,27 +42,20 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
 
 # Eseguibili principali (solo quelli che esistono)
 add_executable(correctness_check correctness_check.cpp)
-
 add_executable(test_correctness test_correctness.cpp)
-add_executable(test_scheduling test_scheduling.cpp)
 add_executable(seq seq.cpp)
 add_executable(parallel parallel.cpp)
 
 # Link delle librerie necessarie
 if(APPLE)
-
     target_link_libraries(test_correctness omp pthread)
     target_link_libraries(correctness_check omp pthread)
-    target_link_libraries(test_scheduling omp pthread)
     target_link_libraries(seq omp pthread)
     target_link_libraries(parallel omp pthread)
 else()
     find_package(Threads REQUIRED)
-
     target_link_libraries(test_correctness OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(correctness_check OpenMP::OpenMP_CXX Threads::Threads)
-    target_link_libraries(test_scheduling OpenMP::OpenMP_CXX Threads::Threads)
-    target_link_libraries(test_scheduling_aos OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(seq OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(parallel OpenMP::OpenMP_CXX Threads::Threads)
 endif()
@@ -80,7 +73,7 @@ add_custom_target(run-test
 )
 
 # Install targets (solo quelli esistenti)
-install(TARGETS test_correctness correctness_check test_scheduling seq parallel DESTINATION bin)
+install(TARGETS test_correctness correctness_check seq parallel DESTINATION bin)
 
 # Print configuration info
 message(STATUS "")

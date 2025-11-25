@@ -651,8 +651,8 @@ int main() {
 
     std::cout << "Found " << book_files.size() << " books\n";
 
-    const int WARMUP_RUNS = 0;
-    const int MEASURED_RUNS = 1;
+    const int WARMUP_RUNS = 2;
+    const int MEASURED_RUNS = 10;
     const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;
 
     struct RunResult { double wall; double cpu; bool warmup; };
@@ -739,9 +739,9 @@ int main() {
     stddev_cpu = std::sqrt(stddev_cpu / measured_cpu.size());
     double cv_cpu = (stddev_cpu / mean_cpu) * 100.0;
 
-    std::string output_dir = "test/output_sequential";
-    ensure_directory_exists(output_dir);
 
+    std::string output_dir = "results/sequential";
+    ensure_directory_exists(output_dir);
 
 
 
@@ -751,7 +751,37 @@ int main() {
     CSVSaver::save_ngrams(char_bigrams, output_dir + "/char_bigrams.csv", "Char Bigrams");
     CSVSaver::save_ngrams(char_trigrams, output_dir + "/char_trigrams.csv", "Char Trigrams");
 
-
+    // Save performance statistics + n-gram info in one file
+    std::ofstream stats_file(output_dir + "/performance_stats.txt");
+    if (stats_file) {
+        stats_file << "╔═══════════════════════════════════════════════════════╗\n";
+        stats_file << "║         PERFORMANCE SUMMARY (" << MEASURED_RUNS << " runs)              ║\n";
+        stats_file << "╠═══════════════════════════════════════════════════════╣\n";
+        stats_file << "║ THREADS USED: 1 (Sequential)                         ║\n";
+        stats_file << "╠═══════════════════════════════════════════════════════╣\n";
+        stats_file << "║ WALL-CLOCK TIME                                       ║\n";
+        stats_file << "║   Mean:         " << std::setw(11) << std::fixed << std::setprecision(3) << mean << " s                        ║\n";
+        stats_file << "║   Minimum:      " << std::setw(11) << std::fixed << std::setprecision(3) << min_time << " s                        ║\n";
+        stats_file << "║   Maximum:      " << std::setw(11) << std::fixed << std::setprecision(3) << max_time << " s                        ║\n";
+        stats_file << "║   Std Deviation:" << std::setw(11) << std::fixed << std::setprecision(3) << stddev << " s                        ║\n";
+        stats_file << "║   Coeff. Variation:" << std::setw(8) << std::fixed << std::setprecision(2) << cv << " %                         ║\n";
+        stats_file << "║                                                       ║\n";
+        stats_file << "║ CPU TIME                                              ║\n";
+        stats_file << "║   Mean:         " << std::setw(11) << std::fixed << std::setprecision(3) << mean_cpu << " s                        ║\n";
+        stats_file << "║   Minimum:      " << std::setw(11) << std::fixed << std::setprecision(3) << min_cpu << " s                        ║\n";
+        stats_file << "║   Maximum:      " << std::setw(11) << std::fixed << std::setprecision(3) << max_cpu << " s                        ║\n";
+        stats_file << "║   Std Deviation:" << std::setw(11) << std::fixed << std::setprecision(3) << stddev_cpu << " s                        ║\n";
+        stats_file << "║   Coeff. Variation:" << std::setw(8) << std::fixed << std::setprecision(2) << cv_cpu << " %                         ║\n";
+        stats_file << "╚═══════════════════════════════════════════════════════╝\n";
+        stats_file << "\n";
+        stats_file << "N-GRAM STATISTICS:\n";
+        stats_file << "  Word Bigrams:  " << word_bigrams.total_unique() << " unique\n";
+        stats_file << "  Word Trigrams: " << word_trigrams.total_unique() << " unique\n";
+        stats_file << "  Char Bigrams:  " << char_bigrams.total_unique() << " unique\n";
+        stats_file << "  Char Trigrams: " << char_trigrams.total_unique() << " unique\n";
+        stats_file.close();
+        std::cout << "\nPerformance statistics saved to " << output_dir << "/performance_stats.txt\n";
+    }
 
     return 0;
 }

@@ -1,5 +1,7 @@
+
 //
 // Created by Lorenzo Cappetti on 21/11/25.
+// Optimized with Sharded Map & Arena Allocation
 //
 
 #include <iostream>
@@ -20,19 +22,18 @@
 #include <cstring>
 #include <string_view>
 #include <memory>
+#include <mutex>
+#include <array>
 
 namespace fs = std::filesystem;
 
 //═══════════════════════════════════════════════════════════════
 // COMPILE-TIME CONSTANTS
 //═══════════════════════════════════════════════════════════════
-constexpr size_t ARENA_INITIAL_SIZE = 20'000'000;
+constexpr size_t ARENA_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB blocks
+constexpr size_t NUM_SHARDS = 1024;                  // Number of shards for the hash map
 constexpr size_t WORD_BUFFER_SIZE = 20000;
 constexpr size_t CHAR_BUFFER_SIZE = 100000;
-constexpr size_t WB_RESERVE = 150000;
-constexpr size_t WT_RESERVE = 300000;
-constexpr size_t CB_RESERVE = 75000;
-constexpr size_t CT_RESERVE = 150000;
 
 //═══════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS
@@ -44,7 +45,121 @@ static inline void ensure_directory_exists(const std::string& dir) {
 }
 
 //═══════════════════════════════════════════════════════════════
-// OPTIMIZED TEXT CLEANER - Zero-copy with string_view
+// ARENA ALLOCATOR
+// Simple pointer-bump allocator for fast string storage.
+//═══════════════════════════════════════════════════════════════
+class Arena {
+private:
+    struct Block {
+        std::unique_ptr<char[]> data;
+        size_t size;
+        size_t used;
+    };
+    std::vector<Block> blocks;
+
+public:
+    Arena() {
+        // Pre-allocate first block
+        allocate_block(ARENA_BLOCK_SIZE);
+    }
+
+    // Disable copy/move to prevent accidental double-frees or pointer invalidation
+    Arena(const Arena&) = delete;
+    Arena& operator=(const Arena&) = delete;
+
+    void allocate_block(size_t size) {
+        blocks.push_back({std::make_unique<char[]>(size), size, 0});
+    }
+
+    // Allocates memory for a string and returns a string_view to it
+    std::string_view allocate(std::string_view s) {
+        if (blocks.back().used + s.size() > blocks.back().size) {
+            // Need a new block. Make it at least large enough for s, or default size
+            size_t next_size = std::max(ARENA_BLOCK_SIZE, s.size());
+            allocate_block(next_size);
+        }
+
+        Block& current = blocks.back();
+        char* dest = current.data.get() + current.used;
+        std::memcpy(dest, s.data(), s.size());
+        current.used += s.size();
+
+        return std::string_view(dest, s.size());
+    }
+    
+    size_t total_memory() const {
+        size_t total = 0;
+        for(const auto& b : blocks) total += b.size;
+        return total;
+    }
+};
+
+//═══════════════════════════════════════════════════════════════
+// SHARDED HASH MAP
+// A thread-safe hash map split into shards to minimize locking.
+// Each shard has its own Mutex, Map, and Arena.
+//═══════════════════════════════════════════════════════════════
+class ShardedMap {
+private:
+    struct alignas(64) Shard { // Align to cache line to prevent false sharing
+        std::mutex mtx;
+        std::unordered_map<std::string_view, size_t> map;
+        Arena arena;
+    };
+
+    std::vector<Shard> shards;
+
+public:
+    ShardedMap() : shards(NUM_SHARDS) {}
+
+    void insert_or_increment(std::string_view key) {
+        // Simple hash to pick a shard
+        size_t h = std::hash<std::string_view>{}(key);
+        size_t shard_idx = h % NUM_SHARDS;
+        Shard& shard = shards[shard_idx];
+
+        std::lock_guard<std::mutex> lock(shard.mtx);
+        
+        auto it = shard.map.find(key);
+        if (it != shard.map.end()) {
+            it->second++;
+        } else {
+            // Store the string in the shard's arena so it persists
+            std::string_view stored_key = shard.arena.allocate(key);
+            shard.map[stored_key] = 1;
+        }
+    }
+
+    // Merges all shards into a single vector for sorting/output
+    std::vector<std::pair<std::string, size_t>> get_all_sorted() const {
+        std::vector<std::pair<std::string, size_t>> result;
+        size_t total_size = 0;
+        for (const auto& shard : shards) total_size += shard.map.size();
+        result.reserve(total_size);
+
+        for (const auto& shard : shards) {
+            // No lock needed here if we are guaranteed to be single-threaded at this point
+            for (const auto& [key, count] : shard.map) {
+                result.emplace_back(std::string(key), count);
+            }
+        }
+
+        std::sort(result.begin(), result.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.second > b.second;
+                  });
+        return result;
+    }
+    
+    size_t total_unique() const {
+        size_t count = 0;
+        for (const auto& shard : shards) count += shard.map.size();
+        return count;
+    }
+};
+
+//═══════════════════════════════════════════════════════════════
+// OPTIMIZED TEXT CLEANER
 //═══════════════════════════════════════════════════════════════
 class TextCleaner {
 private:
@@ -94,7 +209,7 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// ULTRA-OPTIMIZED TOKENIZER with SIMD-friendly operations
+// TOKENIZER
 //═══════════════════════════════════════════════════════════════
 class Tokenizer {
 private:
@@ -224,214 +339,16 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// LOCK-FREE STRING POOL with better memory layout
-//═══════════════════════════════════════════════════════════════
-class OptimizedStringPool {
-private:
-    std::vector<char> arena;
-    std::vector<std::string_view> id_to_word;
-    std::unordered_map<std::string_view, size_t> word_to_id;
-
-public:
-    OptimizedStringPool() {
-        arena.reserve(ARENA_INITIAL_SIZE);
-        id_to_word.reserve(100'000);
-        word_to_id.reserve(100'000);
-    }
-
-    inline size_t intern(std::string_view s) {
-        auto it = word_to_id.find(s);
-        if (it != word_to_id.end()) {
-            return it->second;
-        }
-
-        size_t pos = arena.size();
-        arena.insert(arena.end(), s.begin(), s.end());
-
-        std::string_view view(arena.data() + pos, s.size());
-        size_t new_id = id_to_word.size();
-        id_to_word.push_back(view);
-        word_to_id.emplace(view, new_id);
-        return new_id;
-    }
-
-    inline std::string_view get(size_t id) const {
-        return id_to_word[id];
-    }
-
-    size_t size() const { return id_to_word.size(); }
-};
-
-//═══════════════════════════════════════════════════════════════
-// NGRAM ID - Cache-aligned
-//═══════════════════════════════════════════════════════════════
-struct alignas(32) NgramID {
-    size_t word_ids[3];
-    uint8_t length;
-    uint8_t padding[7];
-
-    inline bool operator==(const NgramID& other) const noexcept {
-        return length == other.length &&
-               word_ids[0] == other.word_ids[0] &&
-               (length < 2 || word_ids[1] == other.word_ids[1]) &&
-               (length < 3 || word_ids[2] == other.word_ids[2]);
-    }
-};
-
-struct NgramIDHash {
-    inline size_t operator()(const NgramID& n) const noexcept {
-        size_t hash = 14695981039346656037ULL;
-        hash ^= n.length;
-        hash *= 1099511628211ULL;
-
-        for (size_t i = 0; i < n.length; ++i) {
-            hash ^= n.word_ids[i];
-            hash *= 1099511628211ULL;
-        }
-        return hash;
-    }
-};
-
-//═══════════════════════════════════════════════════════════════
-// HYBRID FREQUENCY COUNTER - Optimized sorting
-//═══════════════════════════════════════════════════════════════
-class HybridFrequencyCounter {
-private:
-    OptimizedStringPool pool;
-    std::vector<NgramID> ngram_ids;
-    std::vector<size_t> frequencies;
-    bool finalized = false;
-
-public:
-    void build_from_aos(const std::unordered_map<std::string, size_t>& aos_map) {
-        size_t total_size = aos_map.size();
-
-        ngram_ids.clear();
-        frequencies.clear();
-        ngram_ids.reserve(total_size);
-        frequencies.reserve(total_size);
-
-        for (const auto& [ngram_str, freq] : aos_map) {
-            NgramID id;
-            id.length = 0;
-
-            const char* str = ngram_str.data();
-            const size_t len = ngram_str.size();
-            size_t start = 0;
-
-            for (size_t pos = 0; pos <= len && id.length < 3; ++pos) {
-                if (pos == len || str[pos] == ' ') {
-                    if (pos > start) {
-                        std::string_view word(str + start, pos - start);
-                        id.word_ids[id.length++] = pool.intern(word);
-                    }
-                    start = pos + 1;
-                }
-            }
-
-            ngram_ids.push_back(id);
-            frequencies.push_back(freq);
-        }
-
-        finalized = true;
-    }
-
-    std::vector<std::pair<std::string, size_t>> get_top_n(size_t n) const {
-        if (!finalized) {
-            throw std::runtime_error("Call build_from_aos() first!");
-        }
-
-        std::vector<size_t> indices(frequencies.size());
-        std::iota(indices.begin(), indices.end(), 0);
-
-        size_t k = std::min(n, indices.size());
-
-        std::partial_sort(
-            indices.begin(),
-            indices.begin() + k,
-            indices.end(),
-            [this](size_t i, size_t j) {
-                return frequencies[i] > frequencies[j];
-            }
-        );
-
-        std::vector<std::pair<std::string, size_t>> result;
-        result.reserve(k);
-
-        for (size_t i = 0; i < k; ++i) {
-            size_t idx = indices[i];
-            const auto& id = ngram_ids[idx];
-
-            std::string ngram;
-            ngram.reserve(64);
-
-            for (size_t j = 0; j < id.length; ++j) {
-                if (j > 0) ngram += ' ';
-                auto word = pool.get(id.word_ids[j]);
-                ngram.append(word.data(), word.size());
-            }
-
-            result.emplace_back(std::move(ngram), frequencies[idx]);
-        }
-
-        return result;
-    }
-
-    std::vector<std::pair<std::string, size_t>> get_all_sorted() const {
-        if (!finalized) {
-            throw std::runtime_error("Call build_from_aos() first!");
-        }
-
-        std::vector<size_t> indices(frequencies.size());
-        std::iota(indices.begin(), indices.end(), 0);
-
-        std::sort(
-            indices.begin(),
-            indices.end(),
-            [this](size_t i, size_t j) {
-                return frequencies[i] > frequencies[j];
-            }
-        );
-
-        std::vector<std::pair<std::string, size_t>> result;
-        result.reserve(indices.size());
-
-        for (size_t idx : indices) {
-            const auto& id = ngram_ids[idx];
-
-            std::string ngram;
-            ngram.reserve(64);
-
-            for (size_t j = 0; j < id.length; ++j) {
-                if (j > 0) ngram += ' ';
-                auto word = pool.get(id.word_ids[j]);
-                ngram.append(word.data(), word.size());
-            }
-
-            result.emplace_back(std::move(ngram), frequencies[idx]);
-        }
-
-        return result;
-    }
-
-    size_t total_unique() const { return ngram_ids.size(); }
-
-    size_t total_count() const {
-        return std::accumulate(frequencies.begin(), frequencies.end(), 0ULL);
-    }
-};
-
-//═══════════════════════════════════════════════════════════════
-// CSV SAVER - Buffered writes
+// CSV SAVER
 //═══════════════════════════════════════════════════════════════
 class CSVSaver {
 public:
     static void save_ngrams(
-        const HybridFrequencyCounter& counter,
+        const ShardedMap& map,
         const std::string& filename,
         const std::string& label
     ) {
-        auto all_ngrams = counter.get_all_sorted();
+        auto all_ngrams = map.get_all_sorted();
 
         std::ofstream out(filename);
         if (!out) {
@@ -455,16 +372,16 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// ULTRA-OPTIMIZED OPENMP PROCESSOR
+// OPTIMIZED OPENMP PROCESSOR
 //═══════════════════════════════════════════════════════════════
 class OptimizedOpenMPProcessor {
 public:
-    static void process_text_aos_optimized(
+    static void process_text_sharded(
         std::string& text,
-        std::unordered_map<std::string, size_t>& word_bigrams,
-        std::unordered_map<std::string, size_t>& word_trigrams,
-        std::unordered_map<std::string, size_t>& char_bigrams,
-        std::unordered_map<std::string, size_t>& char_trigrams,
+        ShardedMap& word_bigrams,
+        ShardedMap& word_trigrams,
+        ShardedMap& char_bigrams,
+        ShardedMap& char_trigrams,
         std::vector<std::string_view>& words_buffer,
         std::vector<char>& chars_buffer
     ) {
@@ -473,123 +390,58 @@ public:
         words_buffer.clear();
         Tokenizer::tokenize_words(text, words_buffer);
 
-        std::string key;
-        key.reserve(128);
+        static thread_local std::string key_buffer;
+        key_buffer.reserve(256);
 
         const size_t word_count = words_buffer.size();
 
         for (size_t i = 0; i + 1 < word_count; ++i) {
-            const auto& w1 = words_buffer[i];
-            const auto& w2 = words_buffer[i + 1];
-
-            key.clear();
-            key.append(w1);
-            key.push_back(' ');
-            key.append(w2);
-            ++word_bigrams[key];
+            key_buffer.clear();
+            key_buffer.append(words_buffer[i]);
+            key_buffer.push_back(' ');
+            key_buffer.append(words_buffer[i + 1]);
+            word_bigrams.insert_or_increment(key_buffer);
         }
 
         for (size_t i = 0; i + 2 < word_count; ++i) {
-            const auto& w1 = words_buffer[i];
-            const auto& w2 = words_buffer[i + 1];
-            const auto& w3 = words_buffer[i + 2];
-
-            key.clear();
-            key.append(w1);
-            key.push_back(' ');
-            key.append(w2);
-            key.push_back(' ');
-            key.append(w3);
-            ++word_trigrams[key];
+            key_buffer.clear();
+            key_buffer.append(words_buffer[i]);
+            key_buffer.push_back(' ');
+            key_buffer.append(words_buffer[i + 1]);
+            key_buffer.push_back(' ');
+            key_buffer.append(words_buffer[i + 2]);
+            word_trigrams.insert_or_increment(key_buffer);
         }
 
         chars_buffer.clear();
         Tokenizer::tokenize_chars(text, chars_buffer);
 
         const size_t char_count = chars_buffer.size();
-
-        key.resize(3);
-        key[1] = ' ';
-
+        char char_key[6]; 
+        
         for (size_t i = 0; i + 1 < char_count; ++i) {
-            key[0] = chars_buffer[i];
-            key[2] = chars_buffer[i + 1];
-            ++char_bigrams[key];
+            char_key[0] = chars_buffer[i];
+            char_key[1] = ' ';
+            char_key[2] = chars_buffer[i + 1];
+            char_bigrams.insert_or_increment(std::string_view(char_key, 3));
         }
-
-        key.resize(5);
-        key[1] = ' ';
-        key[3] = ' ';
 
         for (size_t i = 0; i + 2 < char_count; ++i) {
-            key[0] = chars_buffer[i];
-            key[2] = chars_buffer[i + 1];
-            key[4] = chars_buffer[i + 2];
-            ++char_trigrams[key];
+            char_key[0] = chars_buffer[i];
+            char_key[1] = ' ';
+            char_key[2] = chars_buffer[i + 1];
+            char_key[3] = ' ';
+            char_key[4] = chars_buffer[i + 2];
+            char_trigrams.insert_or_increment(std::string_view(char_key, 5));
         }
     }
 
-    static void parallel_merge_aos(
-        std::vector<std::unordered_map<std::string, size_t>>& thread_maps,
-        std::unordered_map<std::string, size_t>& result
-    ) {
-        if (thread_maps.empty()) return;
-        if (thread_maps.size() == 1) {
-            result = std::move(thread_maps[0]);
-            return;
-        }
-
-        size_t active_maps = thread_maps.size();
-
-        while (active_maps > 1) {
-            size_t pairs = active_maps / 2;
-
-            #pragma omp parallel for schedule(dynamic)
-            for (size_t i = 0; i < pairs; ++i) {
-                auto& target = thread_maps[i];
-                auto& source = thread_maps[i + pairs];
-
-                if (source.size() > target.size()) {
-                    std::swap(target, source);
-                }
-
-                target.reserve(target.size() + source.size());
-                for (auto& [key, val] : source) {
-                    target[key] += val;
-                }
-                source.clear();
-            }
-
-            if (active_maps % 2 == 1) {
-                if (pairs > 0) {
-                    auto& odd_map = thread_maps[active_maps - 1];
-                    auto& target_map = thread_maps[pairs];
-
-                    if (odd_map.size() > target_map.size()) {
-                        std::swap(target_map, odd_map);
-                    }
-
-                    target_map.reserve(target_map.size() + odd_map.size());
-                    for (auto& [key, val] : odd_map) {
-                        target_map[key] += val;
-                    }
-                    odd_map.clear();
-                }
-                active_maps = pairs + 1;
-            } else {
-                active_maps = pairs;
-            }
-        }
-
-        result = std::move(thread_maps[0]);
-    }
-
-    static void process_parallel_hybrid(
+    static void process_parallel_sharded(
         const std::vector<std::string>& book_files,
-        HybridFrequencyCounter& word_bigrams,
-        HybridFrequencyCounter& word_trigrams,
-        HybridFrequencyCounter& char_bigrams,
-        HybridFrequencyCounter& char_trigrams,
+        ShardedMap& word_bigrams,
+        ShardedMap& word_trigrams,
+        ShardedMap& char_bigrams,
+        ShardedMap& char_trigrams,
         int num_threads = 0
     ) {
         if (num_threads == 0) num_threads = omp_get_max_threads();
@@ -597,30 +449,14 @@ public:
 
         int total_books = book_files.size();
 
-        std::vector<std::unordered_map<std::string, size_t>> thread_wb(num_threads);
-        std::vector<std::unordered_map<std::string, size_t>> thread_wt(num_threads);
-        std::vector<std::unordered_map<std::string, size_t>> thread_cb(num_threads);
-        std::vector<std::unordered_map<std::string, size_t>> thread_ct(num_threads);
-
-        #pragma omp parallel default(none) shared(book_files, total_books, thread_wb, thread_wt, thread_cb, thread_ct)
+        #pragma omp parallel default(none) shared(book_files, total_books, word_bigrams, word_trigrams, char_bigrams, char_trigrams)
         {
-            int tid = omp_get_thread_num();
-            auto& my_wb = thread_wb[tid];
-            auto& my_wt = thread_wt[tid];
-            auto& my_cb = thread_cb[tid];
-            auto& my_ct = thread_ct[tid];
-
-            my_wb.reserve(WB_RESERVE);
-            my_wt.reserve(WT_RESERVE);
-            my_cb.reserve(CB_RESERVE);
-            my_ct.reserve(CT_RESERVE);
-
             std::vector<std::string_view> words_buf;
             std::vector<char> chars_buf;
             words_buf.reserve(WORD_BUFFER_SIZE);
             chars_buf.reserve(CHAR_BUFFER_SIZE);
 
-            #pragma omp for schedule(dynamic, 1) nowait
+            #pragma omp for schedule(dynamic) 
             for (int i = 0; i < total_books; ++i) {
                 const auto& filepath = book_files[i];
 
@@ -634,31 +470,9 @@ public:
 
                 TextCleaner::clean_text_inplace(text);
 
-                process_text_aos_optimized(text, my_wb, my_wt, my_cb, my_ct,
-                                          words_buf, chars_buf);
+                process_text_sharded(text, word_bigrams, word_trigrams, char_bigrams, char_trigrams,
+                                     words_buf, chars_buf);
             }
-        }
-
-        std::unordered_map<std::string, size_t> merged_wb, merged_wt, merged_cb, merged_ct;
-
-        parallel_merge_aos(thread_wb, merged_wb);
-        parallel_merge_aos(thread_wt, merged_wt);
-        parallel_merge_aos(thread_cb, merged_cb);
-        parallel_merge_aos(thread_ct, merged_ct);
-
-        #pragma omp parallel sections default(none) shared(word_bigrams, word_trigrams, char_bigrams, char_trigrams, merged_wb, merged_wt, merged_cb, merged_ct)
-        {
-            #pragma omp section
-            word_bigrams.build_from_aos(merged_wb);
-
-            #pragma omp section
-            word_trigrams.build_from_aos(merged_wt);
-
-            #pragma omp section
-            char_bigrams.build_from_aos(merged_cb);
-
-            #pragma omp section
-            char_trigrams.build_from_aos(merged_ct);
         }
     }
 };
@@ -690,7 +504,7 @@ int main()
     }
 
     int max_threads = omp_get_max_threads();
-    const int MAX_VIRTUAL_THREADS = 32;
+    const int MAX_VIRTUAL_THREADS = 100;
     int num_threads;
 
     std::cout << "Threads available: " << max_threads << "\n";
@@ -715,31 +529,32 @@ int main()
         break;
     }
 
-    const int WARMUP_RUNS = 0;
-    const int MEASURED_RUNS = 1;
+    const int WARMUP_RUNS = 2;
+    const int MEASURED_RUNS = 10;
     const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;
 
     struct RunResult { double wall; double cpu; bool warmup; };
     std::vector<RunResult> run_times;
     run_times.reserve(NUM_RUNS);
 
-    HybridFrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
+    // Use pointers to recreate maps for each run to ensure clean state
+    std::unique_ptr<ShardedMap> word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
     for (int run = 0; run < NUM_RUNS; ++run) {
-        word_bigrams = HybridFrequencyCounter();
-        word_trigrams = HybridFrequencyCounter();
-        char_bigrams = HybridFrequencyCounter();
-        char_trigrams = HybridFrequencyCounter();
+        word_bigrams = std::make_unique<ShardedMap>();
+        word_trigrams = std::make_unique<ShardedMap>();
+        char_bigrams = std::make_unique<ShardedMap>();
+        char_trigrams = std::make_unique<ShardedMap>();
 
         auto start_time = std::chrono::high_resolution_clock::now();
         std::clock_t start_cpu = std::clock();
 
-        OptimizedOpenMPProcessor::process_parallel_hybrid(
+        OptimizedOpenMPProcessor::process_parallel_sharded(
             book_files,
-            word_bigrams,
-            word_trigrams,
-            char_bigrams,
-            char_trigrams,
+            *word_bigrams,
+            *word_trigrams,
+            *char_bigrams,
+            *char_trigrams,
             num_threads
         );
 
@@ -778,23 +593,60 @@ int main()
     stddev = std::sqrt(stddev / measured_times.size());
     double cv = (stddev / mean) * 100.0;
 
-    double mean_cpu = 0.0;
+    double mean_cpu = 0.0, min_cpu = measured_cpu[0], max_cpu = measured_cpu[0];
     for (double t : measured_cpu) {
         mean_cpu += t;
+        min_cpu = std::min(min_cpu, t);
+        max_cpu = std::max(max_cpu, t);
     }
     mean_cpu /= measured_cpu.size();
 
-    std::string output_dir = "test/output_hybrid";
+    double stddev_cpu = 0.0;
+    for (double t : measured_cpu) {
+        stddev_cpu += (t - mean_cpu) * (t - mean_cpu);
+    }
+    stddev_cpu = std::sqrt(stddev_cpu / measured_cpu.size());
+    double cv_cpu = (stddev_cpu / mean_cpu) * 100.0;
+
+    std::string output_dir = "results/parallel";
     ensure_directory_exists(output_dir);
 
+    CSVSaver::save_ngrams(*word_bigrams, output_dir + "/word_bigrams.csv", "Word Bigrams");
+    CSVSaver::save_ngrams(*word_trigrams, output_dir + "/word_trigrams.csv", "Word Trigrams");
+    CSVSaver::save_ngrams(*char_bigrams, output_dir + "/char_bigrams.csv", "Char Bigrams");
+    CSVSaver::save_ngrams(*char_trigrams, output_dir + "/char_trigrams.csv", "Char Trigrams");
 
-
-    CSVSaver::save_ngrams(word_bigrams, output_dir + "/word_bigrams.csv", "Word Bigrams");
-    CSVSaver::save_ngrams(word_trigrams, output_dir + "/word_trigrams.csv", "Word Trigrams");
-    CSVSaver::save_ngrams(char_bigrams, output_dir + "/char_bigrams.csv", "Char Bigrams");
-    CSVSaver::save_ngrams(char_trigrams, output_dir + "/char_trigrams.csv", "Char Trigrams");
-
-
+    // Save performance statistics + n-gram info in one file
+    std::ofstream stats_file(output_dir + "/performance_stats.txt");
+    if (stats_file) {
+        stats_file << "╔═══════════════════════════════════════════════════════╗\n";
+        stats_file << "║         PERFORMANCE SUMMARY (" << MEASURED_RUNS << " runs)              ║\n";
+        stats_file << "╠═══════════════════════════════════════════════════════╣\n";
+        stats_file << "║ THREADS USED:  " << std::setw(38) << num_threads << " ║\n";
+        stats_file << "╠═══════════════════════════════════════════════════════╣\n";
+        stats_file << "║ WALL-CLOCK TIME                                       ║\n";
+        stats_file << "║   Mean:         " << std::setw(11) << std::fixed << std::setprecision(3) << mean << " s                        ║\n";
+        stats_file << "║   Minimum:      " << std::setw(11) << std::fixed << std::setprecision(3) << min_time << " s                        ║\n";
+        stats_file << "║   Maximum:      " << std::setw(11) << std::fixed << std::setprecision(3) << max_time << " s                        ║\n";
+        stats_file << "║   Std Deviation:" << std::setw(11) << std::fixed << std::setprecision(3) << stddev << " s                        ║\n";
+        stats_file << "║   Coeff. Variation:" << std::setw(8) << std::fixed << std::setprecision(2) << cv << " %                         ║\n";
+        stats_file << "║                                                       ║\n";
+        stats_file << "║ CPU TIME                                              ║\n";
+        stats_file << "║   Mean:         " << std::setw(11) << std::fixed << std::setprecision(3) << mean_cpu << " s                        ║\n";
+        stats_file << "║   Minimum:      " << std::setw(11) << std::fixed << std::setprecision(3) << min_cpu << " s                        ║\n";
+        stats_file << "║   Maximum:      " << std::setw(11) << std::fixed << std::setprecision(3) << max_cpu << " s                        ║\n";
+        stats_file << "║   Std Deviation:" << std::setw(11) << std::fixed << std::setprecision(3) << stddev_cpu << " s                        ║\n";
+        stats_file << "║   Coeff. Variation:" << std::setw(8) << std::fixed << std::setprecision(2) << cv_cpu << " %                         ║\n";
+        stats_file << "╚═══════════════════════════════════════════════════════╝\n";
+        stats_file << "\n";
+        stats_file << "N-GRAM STATISTICS:\n";
+        stats_file << "  Word Bigrams:  " << word_bigrams->total_unique() << " unique\n";
+        stats_file << "  Word Trigrams: " << word_trigrams->total_unique() << " unique\n";
+        stats_file << "  Char Bigrams:  " << char_bigrams->total_unique() << " unique\n";
+        stats_file << "  Char Trigrams: " << char_trigrams->total_unique() << " unique\n";
+        stats_file.close();
+        std::cout << "\nPerformance statistics saved to " << output_dir << "/performance_stats.txt\n";
+    }
 
     return 0;
 }
