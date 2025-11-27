@@ -482,7 +482,7 @@ public:
 //═══════════════════════════════════════════════════════════════
 int main()
 {
-    std::string folder_path = "/Users/lorenzocappetti/CLionProjects/Bigrams_Trigrams/book_gutenberg";
+    std::string folder_path = "/home/lollo/CLionProjects/Bigrams_Trigrams/book_gutenberg/book_gutenberg";
 
     if (!fs::exists(folder_path)) {
         std::cerr << "Folder not found: " << folder_path << "\n";
