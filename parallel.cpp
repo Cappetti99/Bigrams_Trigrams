@@ -86,7 +86,7 @@ public:
 
         return std::string_view(dest, s.size());
     }
-    
+
     size_t total_memory() const {
         size_t total = 0;
         for(const auto& b : blocks) total += b.size;
@@ -119,7 +119,7 @@ public:
         Shard& shard = shards[shard_idx];
 
         std::lock_guard<std::mutex> lock(shard.mtx);
-        
+
         auto it = shard.map.find(key);
         if (it != shard.map.end()) {
             it->second++;
@@ -150,7 +150,7 @@ public:
                   });
         return result;
     }
-    
+
     size_t total_unique() const {
         size_t count = 0;
         for (const auto& shard : shards) count += shard.map.size();
@@ -417,8 +417,8 @@ public:
         Tokenizer::tokenize_chars(text, chars_buffer);
 
         const size_t char_count = chars_buffer.size();
-        char char_key[6]; 
-        
+        char char_key[6];
+
         for (size_t i = 0; i + 1 < char_count; ++i) {
             char_key[0] = chars_buffer[i];
             char_key[1] = ' ';
@@ -456,7 +456,7 @@ public:
             words_buf.reserve(WORD_BUFFER_SIZE);
             chars_buf.reserve(CHAR_BUFFER_SIZE);
 
-            #pragma omp for schedule(dynamic) 
+            #pragma omp for schedule(dynamic)
             for (int i = 0; i < total_books; ++i) {
                 const auto& filepath = book_files[i];
 
@@ -504,7 +504,7 @@ int main()
     }
 
     int max_threads = omp_get_max_threads();
-    const int MAX_VIRTUAL_THREADS = 100;
+    const int MAX_VIRTUAL_THREADS = 1000;
     int num_threads;
 
     std::cout << "Threads available: " << max_threads << "\n";

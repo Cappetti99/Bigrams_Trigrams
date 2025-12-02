@@ -55,16 +55,7 @@ compile() {
 
     # Compila usando cmake --build (funziona con qualsiasi generatore)
     print_info "Compilazione in corso..."
-
-    # Verifica se esiste build.ninja (usa Ninja) o Makefile (usa Make)
-    if [ -f "build.ninja" ]; then
-        ninja -j $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    elif [ -f "Makefile" ]; then
-        make -j $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    else
-        # Fallback a cmake --build
-        cmake --build . --config Release -j $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    fi
+    cmake --build . --config Release -j $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
     if [ $? -ne 0 ]; then
         print_error "Compilazione fallita!"

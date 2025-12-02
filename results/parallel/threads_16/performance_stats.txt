@@ -1,0 +1,25 @@
+╔═══════════════════════════════════════════════════════╗
+║         PERFORMANCE SUMMARY (10 runs)              ║
+╠═══════════════════════════════════════════════════════╣
+║ THREADS USED:                                      16 ║
+╠═══════════════════════════════════════════════════════╣
+║ WALL-CLOCK TIME                                       ║
+║   Mean:              16.138 s                        ║
+║   Minimum:           16.026 s                        ║
+║   Maximum:           16.290 s                        ║
+║   Std Deviation:      0.067 s                        ║
+║   Coeff. Variation:    0.41 %                         ║
+║                                                       ║
+║ CPU TIME                                              ║
+║   Mean:             166.494 s                        ║
+║   Minimum:          165.383 s                        ║
+║   Maximum:          167.914 s                        ║
+║   Std Deviation:      0.758 s                        ║
+║   Coeff. Variation:    0.46 %                         ║
+╚═══════════════════════════════════════════════════════╝
+
+N-GRAM STATISTICS:
+  Word Bigrams:  13040509 unique
+  Word Trigrams: 47119172 unique
+  Char Bigrams:  676 unique
+  Char Trigrams: 16396 unique
