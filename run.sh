@@ -90,6 +90,18 @@ run_parallel() {
     "$BUILD_DIR/parallel"
 }
 
+# Funzione per eseguire il programma parallelo SOA
+run_parallel_soa() {
+    print_info "Esecuzione del programma PARALLELO SOA..."
+
+    if [ ! -f "$BUILD_DIR/parallel_soa" ]; then
+        print_error "Eseguibile 'parallel_soa' non trovato. Compila prima il progetto."
+        exit 1
+    fi
+
+    "$BUILD_DIR/parallel_soa"
+}
+
 # Funzione per eseguire il test di correttezza
 run_test() {
     print_info "Esecuzione del TEST DI CORRETTEZZA..."
@@ -138,6 +150,7 @@ show_help() {
     echo "  compile              - Compila il progetto"
     echo "  seq                  - Esegue il programma sequenziale"
     echo "  parallel             - Esegue il programma parallelo"
+    echo "  parallel_soa         - Esegue il programma parallelo SOA"
     echo "  test                 - Esegue i test di correttezza"
     echo "  check                - Esegue il controllo di correttezza"
     echo "  clean                - Rimuove i file di build"
@@ -145,9 +158,10 @@ show_help() {
     echo "  help                 - Mostra questo messaggio di aiuto"
     echo ""
     echo "Esempi:"
-    echo "  ./run.sh compile     # Compila il progetto"
-    echo "  ./run.sh parallel    # Esegue la versione parallela"
-    echo "  ./run.sh all         # Compila ed esegue tutto"
+    echo "  ./run.sh compile       # Compila il progetto"
+    echo "  ./run.sh parallel      # Esegue la versione parallela"
+    echo "  ./run.sh parallel_soa  # Esegue la versione parallela SOA"
+    echo "  ./run.sh all           # Compila ed esegue tutto"
     echo ""
 }
 
@@ -167,6 +181,12 @@ case "${1:-help}" in
             compile
         fi
         run_parallel
+        ;;
+    parallel_soa)
+        if [ ! -f "$BUILD_DIR/parallel_soa" ]; then
+            compile
+        fi
+        run_parallel_soa
         ;;
     test)
         if [ ! -f "$BUILD_DIR/test_correctness" ]; then
