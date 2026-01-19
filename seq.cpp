@@ -1,6 +1,11 @@
 //
 // Created by Lorenzo Cappetti on 21/11/25.
 //
+// Sequential N-gram Analysis Program
+// Analyzes Project Gutenberg books to count word/char bigrams and trigrams.
+// Main optimizations: string interning, cache-aligned structures, in-place operations,
+// and a two-phase approach (hash map accumulation → sorted array queries).
+//
 
 #include <iostream>
 #include <fstream>
@@ -24,8 +29,9 @@ namespace fs = std::filesystem;
 
 //═══════════════════════════════════════════════════════════════
 // COMPILE-TIME CONSTANTS
+// Pre-allocated sizes tuned for Gutenberg books to avoid reallocations
 //═══════════════════════════════════════════════════════════════
-constexpr size_t ARENA_INITIAL_SIZE = 20'000'000;
+constexpr size_t ARENA_INITIAL_SIZE = 20'000'000;  // String pool arena size
 constexpr size_t WORD_BUFFER_SIZE = 20000;
 constexpr size_t CHAR_BUFFER_SIZE = 100000;
 constexpr size_t WB_RESERVE = 150000;
@@ -43,7 +49,9 @@ static inline void ensure_directory_exists(const std::string& dir) {
 }
 
 //═══════════════════════════════════════════════════════════════
-// OPTIMIZED TEXT CLEANER - Zero-copy with string_view
+// TEXT CLEANER
+// Strips Gutenberg headers/footers using memmem() (faster than string::find).
+// Everything happens in-place to avoid copies.
 //═══════════════════════════════════════════════════════════════
 class TextCleaner {
 private:
@@ -51,11 +59,8 @@ private:
     static constexpr std::string_view END_MARKER = "*** END OF";
 
 public:
-    /**
-     * Rimuove header e footer standard dei libri Project Gutenberg.
-     * Modifica la stringa in-place per evitare copie non necessarie.
-     * Usa memmem() che è più veloce di std::string::find() per pattern matching.
-     */
+    // Removes Gutenberg header/footer markers ("*** START OF" / "*** END OF").
+    // Uses memmem() for speed, modifies string in-place with one memmove+resize.
     static inline void clean_text_inplace(std::string& text) {
         size_t start_pos = 0;
         size_t end_pos = text.size();
@@ -101,20 +106,20 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// ULTRA-OPTIMIZED TOKENIZER with SIMD-friendly operations
+// TOKENIZER
+// Fast text normalization using a lookup table (no repeated tolower/isalpha calls),
+// in-place modification with read/write pointers, and UTF-8 accent handling.
 //═══════════════════════════════════════════════════════════════
 class Tokenizer {
 private:
+    // Precomputed character info to avoid calling tolower/isalpha repeatedly
     struct CharInfo {
-        unsigned char lower;
-        uint8_t flags; // bit 0: is_alpha, bit 1: is_space, bit 2: is_punct, bit 3: is_digit
+        unsigned char lower;  // Pre-lowercased version
+        uint8_t flags;        // Bit flags: 0=alpha, 1=space, 2=punct, 3=digit
     };
 
-    /**
-     * Lookup table per caratteri ASCII.
-     * Pre-calcola minuscole e flags per ogni carattere (alpha, space, punct, digit).
-     * Pattern Singleton: inizializzata una sola volta, poi riusata per tutte le chiamate.
-     */
+    // Returns a static 256-entry lookup table for ASCII chars.
+    // Built once on first call, then reused. No runtime classification overhead.
     static const CharInfo* get_char_table() {
         static CharInfo table[256];
         static bool initialized = false;
@@ -134,9 +139,10 @@ private:
         return table;
     }
 
+    // Converts UTF-8 accented chars to ASCII (é→e, ñ→n, etc.) for normalization
     static inline std::string_view process_utf8_char(const unsigned char* bytes, size_t& skip) {
         skip = 0;
-        if ((bytes[0] & 0xE0) == 0xC0 && bytes[1]) {
+        if ((bytes[0] & 0xE0) == 0xC0 && bytes[1]) {  // 2-byte UTF-8 sequence
             skip = 2;
             unsigned char first = bytes[0];
             unsigned char second = bytes[1];
@@ -162,14 +168,8 @@ private:
     }
 
 public:
-    /**
-     * Normalizza il testo in-place:
-     * - Converte in minuscolo
-     * - Rimuove punteggiatura (se richiesto)
-     * - Rimuove cifre
-     * - Gestisce caratteri UTF-8 accentati
-     * Due puntatori (read/write) permettono modifica in-place senza allocazioni extra.
-     */
+    // Normalizes text in-place: lowercase, remove digits, handle UTF-8 accents.
+    // Two-pointer approach (read/write) avoids allocations, resize only at the end.
     static void normalize_inplace(std::string& text, bool remove_punct = false) {
         const CharInfo* table = get_char_table();
         char* write = &text[0];  // Puntatore scrittura
@@ -208,6 +208,7 @@ public:
         text.resize(write - &text[0]);
     }
 
+    // Splits text into words using string_view (zero-copy), space/tab/newline as delimiters
     static inline void tokenize_words(const std::string& text, std::vector<std::string_view>& tokens) {
         tokens.clear();
 
@@ -244,10 +245,9 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// LOCK-FREE STRING POOL with better memory layout
-// String interning: ogni parola unica viene memorizzata una sola volta.
-// Arena allocator: tutte le stringhe in un unico buffer contiguo.
-// Vantaggi: memoria ridotta, migliore cache locality, confronti O(1) su ID.
+// STRING POOL (String Interning + Arena Allocation)
+// Each unique word stored once in a contiguous arena.
+// Benefits: no duplicate strings, better cache locality, fast ID-based comparison.
 //═══════════════════════════════════════════════════════════════
 class OptimizedStringPool {
 private:
@@ -262,9 +262,10 @@ public:
         word_to_id.reserve(100'000);
     }
 
+    // Returns existing ID or creates new entry. Uses string_view to avoid copying.
     inline size_t intern(std::string_view s) {
         auto it = word_to_id.find(s);
-        if (it != word_to_id.end()) {
+        if (it != word_to_id.end()) {  // Already interned
             return it->second;
         }
 
@@ -286,10 +287,9 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// NGRAM ID - Cache-aligned
-// Rappresentazione compatta di un n-gram usando ID numerici invece di stringhe.
-// alignas(32): allineamento a cache line per accesso più veloce.
-// Padding esplicito per evitare false sharing in ambiente parallelo.
+// NGRAM ID
+// Stores n-grams as numeric IDs instead of strings for fast comparison.
+// Cache-aligned (32B) with explicit padding to prevent false sharing.
 //═══════════════════════════════════════════════════════════════
 struct alignas(32) NgramID {
     size_t word_ids[3];  // Fino a 3 parole (trigram)
@@ -304,9 +304,10 @@ struct alignas(32) NgramID {
     }
 };
 
+// FNV-1a hash for NgramID - fast with good distribution
 struct NgramIDHash {
     inline size_t operator()(const NgramID& n) const noexcept {
-        size_t hash = 14695981039346656037ULL;
+        size_t hash = 14695981039346656037ULL;  // FNV offset basis
         hash ^= n.length;
         hash *= 1099511628211ULL;
 
@@ -319,7 +320,10 @@ struct NgramIDHash {
 };
 
 //═══════════════════════════════════════════════════════════════
-// HYBRID FREQUENCY COUNTER - Optimized sorting
+// HYBRID FREQUENCY COUNTER
+// Two-phase design: hash map for accumulation (fast inserts),
+// then convert to parallel arrays for sorting/queries (cache-friendly).
+// Uses partial_sort for top-N: O(n log k) instead of O(n log n).
 //═══════════════════════════════════════════════════════════════
 class HybridFrequencyCounter {
 private:
@@ -329,12 +333,8 @@ private:
     bool finalized = false;
 
 public:
-    /**
-     * Converte da AoS (Array of Structs) a SoA (Struct of Arrays).
-     * AoS: vector<pair<string, freq>> - meglio per inserimenti
-     * SoA: separate arrays per ngram_ids e frequencies - meglio per query
-     * Parsing: split della stringa n-gram ("word1 word2") in ID numerici.
-     */
+    // Converts from hash map (good for inserts) to parallel arrays (good for queries).
+    // Parses each n-gram string ("word1 word2"), interns words to IDs.
     void build_from_aos(const std::unordered_map<std::string, size_t>& aos_map) {
         size_t total_size = aos_map.size();
 
@@ -368,11 +368,8 @@ public:
         finalized = true;
     }
 
-    /**
-     * Restituisce i top N n-gram più frequenti.
-     * Usa partial_sort invece di sort completo: O(n log k) invece di O(n log n).
-     * Ottimizzazione importante quando k << n (es. top 20 su 100k elementi).
-     */
+    // Returns top N n-grams using partial_sort (O(n log k) vs O(n log n)).
+    // Important when k << n (e.g., top 20 from 100k elements).
     std::vector<std::pair<std::string, size_t>> get_top_n(size_t n) const {
         if (!finalized) {
             throw std::runtime_error("Call build_from_aos() first!");
@@ -459,7 +456,7 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// CSV SAVER - Buffered writes
+// CSV SAVER (with buffered I/O)
 //═══════════════════════════════════════════════════════════════
 class CSVSaver {
 public:
@@ -476,7 +473,7 @@ public:
             return;
         }
 
-        // Buffering per scritture più veloci
+        // 64KB buffer to reduce system calls
         char buffer[65536];
         out.rdbuf()->pubsetbuf(buffer, sizeof(buffer));
 
@@ -493,10 +490,13 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// SEQUENTIAL PROCESSOR (NO OpenMP)
+// SEQUENTIAL PROCESSOR
+// Single-threaded baseline. Pipeline: read → clean → normalize → tokenize → count n-grams.
 //═══════════════════════════════════════════════════════════════
 class SequentialProcessor {
 public:
+    // Processes one text: normalize, tokenize, generate n-grams.
+    // Uses pre-allocated buffers to avoid reallocations.
     static void process_text_aos_optimized(
         std::string& text,
         std::unordered_map<std::string, size_t>& word_bigrams,
@@ -516,7 +516,7 @@ public:
 
         const size_t word_count = words_buffer.size();
 
-        // WORD BIGRAMS
+        // WORD BIGRAMS - sliding window, reusing string buffer
         for (size_t i = 0; i + 1 < word_count; ++i) {
             const auto& w1 = words_buffer[i];
             const auto& w2 = words_buffer[i + 1];
@@ -548,7 +548,7 @@ public:
 
         const size_t char_count = chars_buffer.size();
 
-        // CHAR BIGRAMS
+        // CHAR BIGRAMS - fixed "c1 c2" format (3 chars)
         key.resize(3);
         key[1] = ' ';
 
@@ -571,13 +571,8 @@ public:
         }
     }
 
-    /**
-     * Processo sequenziale (singolo thread):
-     * 1. Accumula tutti gli n-gram in hash map (AoS - efficiente per inserimenti)
-     * 2. Converte a SoA alla fine (efficiente per query e ordinamento)
-     * 
-     * Pattern: Batch processing per ridurre overhead di conversione.
-     */
+    // Main pipeline: accumulate in hash maps, convert to arrays at the end.
+    // Pre-allocates containers based on typical workload.
     static void process_sequential(
         const std::vector<std::string>& book_files,
         HybridFrequencyCounter& word_bigrams,
@@ -651,6 +646,7 @@ int main() {
 
     std::cout << "Found " << book_files.size() << " books\n";
 
+    // Benchmark: warm-up runs for cache, then measured runs for stats
     const int WARMUP_RUNS = 2;
     const int MEASURED_RUNS = 10;
     const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;
@@ -663,17 +659,15 @@ int main() {
 
     HybridFrequencyCounter word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
-    // Benchmark loop: esegue N run per ottenere statistiche affidabili
-    // Warm-up runs: scartate per eliminare effetti di cold cache
-    // Measured runs: usate per calcolare media, deviazione standard, ecc.
+    // Run multiple times: warm-up (discarded) + measured runs (for stats)
     for (int run = 0; run < NUM_RUNS; ++run) {
-        // Reset strutture dati per ogni run (benchmark pulito)
+        // Reset for clean measurement
         word_bigrams = HybridFrequencyCounter();
         word_trigrams = HybridFrequencyCounter();
         char_bigrams = HybridFrequencyCounter();
         char_trigrams = HybridFrequencyCounter();
 
-        // Doppia misurazione: wall-clock (tempo reale) e CPU time
+        // Measure both wall-clock (includes I/O) and CPU time
         auto start_time = std::chrono::high_resolution_clock::now();
         std::clock_t start_cpu = std::clock();
 
@@ -702,6 +696,7 @@ int main() {
                   << "s (cpu: " << cpu_seconds << "s)\n";
     }
 
+    // Extract measured runs (skip warm-up)
     std::vector<double> measured_times;
     std::vector<double> measured_cpu;
     for (const auto& r : run_times) {
@@ -711,6 +706,7 @@ int main() {
         }
     }
 
+    // Compute stats: mean, min, max, stddev, CV (coefficient of variation)
     double mean = 0.0, min_time = measured_times[0], max_time = measured_times[0];
     for (double t : measured_times) {
         mean += t;
@@ -751,34 +747,32 @@ int main() {
     CSVSaver::save_ngrams(char_bigrams, output_dir + "/char_bigrams.csv", "Char Bigrams");
     CSVSaver::save_ngrams(char_trigrams, output_dir + "/char_trigrams.csv", "Char Trigrams");
 
-    // Save performance statistics + n-gram info in one file
+    // Save performance statistics
     std::ofstream stats_file(output_dir + "/performance_stats.txt");
     if (stats_file) {
-        stats_file << "╔═══════════════════════════════════════════════════════╗\n";
-        stats_file << "║         PERFORMANCE SUMMARY (" << MEASURED_RUNS << " runs)              ║\n";
-        stats_file << "╠═══════════════════════════════════════════════════════╣\n";
-        stats_file << "║ THREADS USED: 1 (Sequential)                         ║\n";
-        stats_file << "╠═══════════════════════════════════════════════════════╣\n";
-        stats_file << "║ WALL-CLOCK TIME                                       ║\n";
-        stats_file << "║   Mean:         " << std::setw(11) << std::fixed << std::setprecision(3) << mean << " s                        ║\n";
-        stats_file << "║   Minimum:      " << std::setw(11) << std::fixed << std::setprecision(3) << min_time << " s                        ║\n";
-        stats_file << "║   Maximum:      " << std::setw(11) << std::fixed << std::setprecision(3) << max_time << " s                        ║\n";
-        stats_file << "║   Std Deviation:" << std::setw(11) << std::fixed << std::setprecision(3) << stddev << " s                        ║\n";
-        stats_file << "║   Coeff. Variation:" << std::setw(8) << std::fixed << std::setprecision(2) << cv << " %                         ║\n";
-        stats_file << "║                                                       ║\n";
-        stats_file << "║ CPU TIME                                              ║\n";
-        stats_file << "║   Mean:         " << std::setw(11) << std::fixed << std::setprecision(3) << mean_cpu << " s                        ║\n";
-        stats_file << "║   Minimum:      " << std::setw(11) << std::fixed << std::setprecision(3) << min_cpu << " s                        ║\n";
-        stats_file << "║   Maximum:      " << std::setw(11) << std::fixed << std::setprecision(3) << max_cpu << " s                        ║\n";
-        stats_file << "║   Std Deviation:" << std::setw(11) << std::fixed << std::setprecision(3) << stddev_cpu << " s                        ║\n";
-        stats_file << "║   Coeff. Variation:" << std::setw(8) << std::fixed << std::setprecision(2) << cv_cpu << " %                         ║\n";
-        stats_file << "╚═══════════════════════════════════════════════════════╝\n";
-        stats_file << "\n";
+        stats_file << "PERFORMANCE SUMMARY (" << MEASURED_RUNS << " runs)\n";
+        stats_file << "Threads: 1 (Sequential)\n\n";
+        
+        stats_file << "WALL-CLOCK TIME:\n";
+        stats_file << "  Mean: " << std::fixed << std::setprecision(3) << mean << " s\n";
+        stats_file << "  Min:  " << min_time << " s\n";
+        stats_file << "  Max:  " << max_time << " s\n";
+        stats_file << "  Std:  " << stddev << " s\n";
+        stats_file << "  CV:   " << std::setprecision(2) << cv << " %\n\n";
+        
+        stats_file << "CPU TIME:\n";
+        stats_file << "  Mean: " << std::setprecision(3) << mean_cpu << " s\n";
+        stats_file << "  Min:  " << min_cpu << " s\n";
+        stats_file << "  Max:  " << max_cpu << " s\n";
+        stats_file << "  Std:  " << stddev_cpu << " s\n";
+        stats_file << "  CV:   " << std::setprecision(2) << cv_cpu << " %\n\n";
+        
         stats_file << "N-GRAM STATISTICS:\n";
-        stats_file << "  Word Bigrams:  " << word_bigrams.total_unique() << " unique\n";
-        stats_file << "  Word Trigrams: " << word_trigrams.total_unique() << " unique\n";
-        stats_file << "  Char Bigrams:  " << char_bigrams.total_unique() << " unique\n";
-        stats_file << "  Char Trigrams: " << char_trigrams.total_unique() << " unique\n";
+        stats_file << "  Word Bigrams:  " << word_bigrams.total_unique() << "\n";
+        stats_file << "  Word Trigrams: " << word_trigrams.total_unique() << "\n";
+        stats_file << "  Char Bigrams:  " << char_bigrams.total_unique() << "\n";
+        stats_file << "  Char Trigrams: " << char_trigrams.total_unique() << "\n";
+        
         stats_file.close();
         std::cout << "\nPerformance statistics saved to " << output_dir << "/performance_stats.txt\n";
     }

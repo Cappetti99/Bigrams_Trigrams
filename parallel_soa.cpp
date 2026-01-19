@@ -1,13 +1,10 @@
-
 //
 // Created by Lorenzo Cappetti on 21/11/25.
 //
-// Parallel N-gram Analysis with OpenMP
-// Key differences from sequential version:
-// - Sharded hash maps (1024 shards) to reduce lock contention
-// - Per-shard arena allocators for thread-safe string storage
-// - OpenMP parallelization with dynamic scheduling
-// - Cache-aligned shards to prevent false sharing
+// Parallel N-gram Analysis - SoA (Structure of Arrays) Version
+// SoA layout: separate arrays for each field vs AoS (array of structs).
+// E.g., data[], sizes[], used[] instead of vector<{data, size, used}>.
+// Better cache when accessing one field, but more complex indexing.
 //
 
 #include <iostream>
@@ -36,8 +33,8 @@ namespace fs = std::filesystem;
 //═══════════════════════════════════════════════════════════════
 // COMPILE-TIME CONSTANTS
 //═══════════════════════════════════════════════════════════════
-constexpr size_t ARENA_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB blocks per arena
-constexpr size_t NUM_SHARDS = 1024;                  // Power of 2 for fast modulo
+constexpr size_t ARENA_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB blocks
+constexpr size_t NUM_SHARDS = 1024;                  // Number of shards for the hash map
 constexpr size_t WORD_BUFFER_SIZE = 20000;
 constexpr size_t CHAR_BUFFER_SIZE = 100000;
 
@@ -51,107 +48,103 @@ static inline void ensure_directory_exists(const std::string& dir) {
 }
 
 //═══════════════════════════════════════════════════════════════
-// ARENA ALLOCATOR
-// Pointer-bump allocator for fast string storage without individual malloc calls.
-// Each shard has its own arena - no synchronization needed within a shard.
-// Strings stay valid until the arena is destroyed (no early frees).
+// ARENA ALLOCATOR - SoA VERSION
+// Separate arrays: data[], sizes[], used[] instead of vector<Block>.
+// Good cache when checking sizes, more pointer chasing for full block access.
 //═══════════════════════════════════════════════════════════════
-class Arena {
+class ArenaSoA {
 private:
-    struct Block {
-        std::unique_ptr<char[]> data;
-        size_t size;
-        size_t used;
-    };
-    std::vector<Block> blocks;
+    // SoA: separate array per field (vs AoS: vector<struct>)
+    std::vector<std::unique_ptr<char[]>> block_data;
+    std::vector<size_t> block_sizes;
+    std::vector<size_t> block_used;
 
 public:
-    Arena() {
-        allocate_block(ARENA_BLOCK_SIZE);  // Start with one 4MB block
+    ArenaSoA() {
+        allocate_block(ARENA_BLOCK_SIZE);
     }
 
-    // Disable copy/move to prevent accidental double-frees or pointer invalidation
-    Arena(const Arena&) = delete;
-    Arena& operator=(const Arena&) = delete;
+    ArenaSoA(const ArenaSoA&) = delete;
+    ArenaSoA& operator=(const ArenaSoA&) = delete;
 
     void allocate_block(size_t size) {
-        blocks.push_back({std::make_unique<char[]>(size), size, 0});
+        block_data.push_back(std::make_unique<char[]>(size));
+        block_sizes.push_back(size);
+        block_used.push_back(0);
     }
 
-    // Allocates space for a string, returns string_view pointing into arena.
-    // When block full, allocates new block. Fast: just bump a pointer.
     std::string_view allocate(std::string_view s) {
-        if (blocks.back().used + s.size() > blocks.back().size) {
+        size_t last_idx = block_data.size() - 1;
+        
+        // Check size in separate array (cache-friendly when iterating many blocks)
+        if (block_used[last_idx] + s.size() > block_sizes[last_idx]) {
             size_t next_size = std::max(ARENA_BLOCK_SIZE, s.size());
             allocate_block(next_size);
+            last_idx = block_data.size() - 1;
         }
 
-        Block& current = blocks.back();
-        char* dest = current.data.get() + current.used;
+        // Three separate array accesses
+        char* dest = block_data[last_idx].get() + block_used[last_idx];
         std::memcpy(dest, s.data(), s.size());
-        current.used += s.size();
+        block_used[last_idx] += s.size();
 
         return std::string_view(dest, s.size());
     }
 
     size_t total_memory() const {
         size_t total = 0;
-        for(const auto& b : blocks) total += b.size;
+        for (size_t s : block_sizes) total += s;
         return total;
     }
 };
 
 //═══════════════════════════════════════════════════════════════
-// SHARDED HASH MAP
-// Thread-safe hash map split into 1024 shards to minimize lock contention.
-// Instead of one global lock, we have 1024 independent locks.
-// Hash determines shard: threads working on different shards don't block each other.
-// Each shard: mutex + map + arena (all cache-aligned to avoid false sharing).
+// SHARDED HASH MAP - SoA VERSION
+// Separate vectors: mutexes[], maps[], arenas[] (vs struct with all three).
+// Mutexes still cache-aligned to avoid false sharing.
 //═══════════════════════════════════════════════════════════════
-class ShardedMap {
+class ShardedMapSoA {
 private:
-    // Cache-line aligned (64B) to prevent false sharing between threads.
-    // False sharing: when different threads modify adjacent memory, cache thrashing occurs.
-    struct alignas(64) Shard {
-        std::mutex mtx;
-        std::unordered_map<std::string_view, size_t> map;
-        Arena arena;
-    };
-
-    std::vector<Shard> shards;
+    // Separate arrays, mutexes cache-aligned for false sharing prevention
+    alignas(64) std::vector<std::mutex> shard_mutexes;
+    std::vector<std::unordered_map<std::string_view, size_t>> shard_maps;
+    std::vector<std::unique_ptr<ArenaSoA>> shard_arenas;
 
 public:
-    ShardedMap() : shards(NUM_SHARDS) {}
-
-    void insert_or_increment(std::string_view key) {
-        // Hash key to determine shard (distributes work across shards)
-        size_t h = std::hash<std::string_view>{}(key);
-        size_t shard_idx = h % NUM_SHARDS;  // Fast modulo (NUM_SHARDS is power of 2)
-        Shard& shard = shards[shard_idx];
-
-        std::lock_guard<std::mutex> lock(shard.mtx);  // Lock only this shard
-
-        auto it = shard.map.find(key);
-        if (it != shard.map.end()) {
-            it->second++;  // Key exists, increment count
-        } else {
-            // New key: store in arena (must persist for map's string_view)
-            std::string_view stored_key = shard.arena.allocate(key);
-            shard.map[stored_key] = 1;
+    ShardedMapSoA() : 
+        shard_mutexes(NUM_SHARDS),
+        shard_maps(NUM_SHARDS) 
+    {
+        shard_arenas.reserve(NUM_SHARDS);
+        for (size_t i = 0; i < NUM_SHARDS; ++i) {
+            shard_arenas.push_back(std::make_unique<ArenaSoA>());
         }
     }
 
-    // Merges all 1024 shards into one sorted vector (called after parallel processing).
-    // No locks needed here - called when all worker threads are done.
+    void insert_or_increment(std::string_view key) {
+        size_t h = std::hash<std::string_view>{}(key);
+        size_t shard_idx = h % NUM_SHARDS;
+
+        // Same index across different arrays
+        std::lock_guard<std::mutex> lock(shard_mutexes[shard_idx]);
+
+        auto it = shard_maps[shard_idx].find(key);
+        if (it != shard_maps[shard_idx].end()) {
+            it->second++;
+        } else {
+            std::string_view stored_key = shard_arenas[shard_idx]->allocate(key);
+            shard_maps[shard_idx][stored_key] = 1;
+        }
+    }
+
     std::vector<std::pair<std::string, size_t>> get_all_sorted() const {
         std::vector<std::pair<std::string, size_t>> result;
         size_t total_size = 0;
-        for (const auto& shard : shards) total_size += shard.map.size();
+        for (const auto& map : shard_maps) total_size += map.size();
         result.reserve(total_size);
 
-        for (const auto& shard : shards) {
-            // No lock needed here if we are guaranteed to be single-threaded at this point
-            for (const auto& [key, count] : shard.map) {
+        for (const auto& map : shard_maps) {
+            for (const auto& [key, count] : map) {
                 result.emplace_back(std::string(key), count);
             }
         }
@@ -165,13 +158,13 @@ public:
 
     size_t total_unique() const {
         size_t count = 0;
-        for (const auto& shard : shards) count += shard.map.size();
+        for (const auto& map : shard_maps) count += map.size();
         return count;
     }
 };
 
 //═══════════════════════════════════════════════════════════════
-// TEXT CLEANER (same as sequential version)
+// OPTIMIZED TEXT CLEANER
 //═══════════════════════════════════════════════════════════════
 class TextCleaner {
 private:
@@ -221,32 +214,35 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// TOKENIZER (same as sequential version)
+// TOKENIZER - SoA VERSION
+// Separate arrays: lower[256] and flags[256] (vs array of struct).
+// Better cache when only checking flags or only converting to lowercase.
 //═══════════════════════════════════════════════════════════════
-class Tokenizer {
+class TokenizerSoA {
 private:
-    struct CharInfo {
-        unsigned char lower;
-        uint8_t flags;
+    // Separate arrays, cache-aligned (read-only after init)
+    struct CharTablesSoA {
+        alignas(64) unsigned char lower[256];
+        alignas(64) uint8_t flags[256];
+        bool initialized = false;
     };
 
-    static const CharInfo* get_char_table() {
-        static CharInfo table[256];
-        static bool initialized = false;
-
-        if (!initialized) {
+    static CharTablesSoA& get_char_tables() {
+        static CharTablesSoA tables;
+        
+        if (!tables.initialized) {
             for (int i = 0; i < 256; i++) {
-                table[i].lower = (i >= 'A' && i <= 'Z') ? i + 32 : i;
-                table[i].flags = 0;
-                if ((i >= 'a' && i <= 'z') || (i >= 'A' && i <= 'Z')) table[i].flags |= 1;
-                if (i == ' ' || i == '\t' || i == '\n' || i == '\r') table[i].flags |= 2;
+                tables.lower[i] = (i >= 'A' && i <= 'Z') ? i + 32 : i;
+                tables.flags[i] = 0;
+                if ((i >= 'a' && i <= 'z') || (i >= 'A' && i <= 'Z')) tables.flags[i] |= 1;
+                if (i == ' ' || i == '\t' || i == '\n' || i == '\r') tables.flags[i] |= 2;
                 if ((i >= 33 && i <= 47) || (i >= 58 && i <= 64) ||
-                    (i >= 91 && i <= 96) || (i >= 123 && i <= 126)) table[i].flags |= 4;
-                if (i >= '0' && i <= '9') table[i].flags |= 8;
+                    (i >= 91 && i <= 96) || (i >= 123 && i <= 126)) tables.flags[i] |= 4;
+                if (i >= '0' && i <= '9') tables.flags[i] |= 8;
             }
-            initialized = true;
+            tables.initialized = true;
         }
-        return table;
+        return tables;
     }
 
     static inline std::string_view process_utf8_char(const unsigned char* bytes, size_t& skip) {
@@ -278,7 +274,11 @@ private:
 
 public:
     static void normalize_inplace(std::string& text, bool remove_punct = false) {
-        const CharInfo* table = get_char_table();
+        const auto& tables = get_char_tables();
+        // Separate pointers for each array
+        const unsigned char* lower_table = tables.lower;
+        const uint8_t* flags_table = tables.flags;
+        
         char* write = &text[0];
         const char* read = text.data();
         const size_t size = text.size();
@@ -299,15 +299,16 @@ public:
                 }
             }
 
-            const auto& info = table[c];
+            // Check flags first, only access lower if needed (better cache)
+            uint8_t flags = flags_table[c];
 
-            if (info.flags & 8) continue;
+            if (flags & 8) continue;
 
-            if (remove_punct && (info.flags & 4)) {
+            if (remove_punct && (flags & 4)) {
                 *write++ = ' ';
-            } else if (info.flags & 1) {
-                *write++ = info.lower;
-            } else if (info.flags & 2) {
+            } else if (flags & 1) {
+                *write++ = lower_table[c];  // Separate array access
+            } else if (flags & 2) {
                 *write++ = ' ';
             }
         }
@@ -351,12 +352,12 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// CSV SAVER (adapted for ShardedMap)
+// CSV SAVER
 //═══════════════════════════════════════════════════════════════
 class CSVSaver {
 public:
     static void save_ngrams(
-        const ShardedMap& map,
+        const ShardedMapSoA& map,
         const std::string& filename,
         const std::string& label
     ) {
@@ -384,31 +385,112 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// OPENMP PARALLEL PROCESSOR
-// Uses OpenMP to process books in parallel across multiple threads.
-// Dynamic scheduling: threads grab books from queue as they finish (load balancing).
-// Each thread has private buffers (words_buf, chars_buf).
-// Shared sharded maps handle concurrent inserts safely.
+// BENCHMARK RESULTS - SoA VERSION
+// Separate arrays: wall_times[], cpu_times[], is_warmup[].
+// Good for computing stats on just one metric (tight loop, better cache).
 //═══════════════════════════════════════════════════════════════
-class OptimizedOpenMPProcessor {
+class BenchmarkResultsSoA {
 public:
-    // Processes one text using sharded maps (called by each thread).
-    // Thread-local buffers avoid allocation overhead.
+    // Each metric in its own contiguous array
+    std::vector<double> wall_times;
+    std::vector<double> cpu_times;
+    std::vector<bool> is_warmup;
+    
+    void reserve(size_t n) {
+        wall_times.reserve(n);
+        cpu_times.reserve(n);
+        is_warmup.reserve(n);
+    }
+    
+    void add_result(double wall, double cpu, bool warmup) {
+        wall_times.push_back(wall);
+        cpu_times.push_back(cpu);
+        is_warmup.push_back(warmup);
+    }
+    
+    size_t size() const { return wall_times.size(); }
+    
+    // Iterate only wall_times[] (tight loop, good cache)
+    void compute_wall_stats(double& mean, double& min_val, double& max_val, 
+                            double& stddev, double& cv) const {
+        std::vector<double> measured;
+        for (size_t i = 0; i < wall_times.size(); ++i) {
+            if (!is_warmup[i]) {
+                measured.push_back(wall_times[i]);
+            }
+        }
+        
+        if (measured.empty()) return;
+        
+        mean = 0.0;
+        min_val = measured[0];
+        max_val = measured[0];
+        
+        for (double t : measured) {
+            mean += t;
+            min_val = std::min(min_val, t);
+            max_val = std::max(max_val, t);
+        }
+        mean /= measured.size();
+        
+        stddev = 0.0;
+        for (double t : measured) {
+            stddev += (t - mean) * (t - mean);
+        }
+        stddev = std::sqrt(stddev / measured.size());
+        cv = (stddev / mean) * 100.0;
+    }
+    
+    void compute_cpu_stats(double& mean, double& min_val, double& max_val,
+                           double& stddev, double& cv) const {
+        std::vector<double> measured;
+        for (size_t i = 0; i < cpu_times.size(); ++i) {
+            if (!is_warmup[i]) {
+                measured.push_back(cpu_times[i]);
+            }
+        }
+        
+        if (measured.empty()) return;
+        
+        mean = 0.0;
+        min_val = measured[0];
+        max_val = measured[0];
+        
+        for (double t : measured) {
+            mean += t;
+            min_val = std::min(min_val, t);
+            max_val = std::max(max_val, t);
+        }
+        mean /= measured.size();
+        
+        stddev = 0.0;
+        for (double t : measured) {
+            stddev += (t - mean) * (t - mean);
+        }
+        stddev = std::sqrt(stddev / measured.size());
+        cv = (stddev / mean) * 100.0;
+    }
+};
+
+//═══════════════════════════════════════════════════════════════
+// OPTIMIZED OPENMP PROCESSOR - SoA VERSION
+//═══════════════════════════════════════════════════════════════
+class OptimizedOpenMPProcessorSoA {
+public:
     static void process_text_sharded(
         std::string& text,
-        ShardedMap& word_bigrams,
-        ShardedMap& word_trigrams,
-        ShardedMap& char_bigrams,
-        ShardedMap& char_trigrams,
+        ShardedMapSoA& word_bigrams,
+        ShardedMapSoA& word_trigrams,
+        ShardedMapSoA& char_bigrams,
+        ShardedMapSoA& char_trigrams,
         std::vector<std::string_view>& words_buffer,
         std::vector<char>& chars_buffer
     ) {
-        Tokenizer::normalize_inplace(text, true);
+        TokenizerSoA::normalize_inplace(text, true);
 
         words_buffer.clear();
-        Tokenizer::tokenize_words(text, words_buffer);
+        TokenizerSoA::tokenize_words(text, words_buffer);
 
-        // Thread-local buffer: each thread has its own, no contention
         static thread_local std::string key_buffer;
         key_buffer.reserve(256);
 
@@ -433,7 +515,7 @@ public:
         }
 
         chars_buffer.clear();
-        Tokenizer::tokenize_chars(text, chars_buffer);
+        TokenizerSoA::tokenize_chars(text, chars_buffer);
 
         const size_t char_count = chars_buffer.size();
         char char_key[6];
@@ -455,14 +537,12 @@ public:
         }
     }
 
-    // Main parallel entry point using OpenMP.
-    // Dynamic scheduling: better load balancing when books vary in size.
     static void process_parallel_sharded(
         const std::vector<std::string>& book_files,
-        ShardedMap& word_bigrams,
-        ShardedMap& word_trigrams,
-        ShardedMap& char_bigrams,
-        ShardedMap& char_trigrams,
+        ShardedMapSoA& word_bigrams,
+        ShardedMapSoA& word_trigrams,
+        ShardedMapSoA& char_bigrams,
+        ShardedMapSoA& char_trigrams,
         int num_threads = 0
     ) {
         if (num_threads == 0) num_threads = omp_get_max_threads();
@@ -470,19 +550,13 @@ public:
 
         int total_books = book_files.size();
 
-        // OpenMP parallel region: each thread executes this block
-        // default(none): explicit variable sharing (safer, catches bugs)
-        // shared: sharded maps are shared (thread-safe by design)
         #pragma omp parallel default(none) shared(book_files, total_books, word_bigrams, word_trigrams, char_bigrams, char_trigrams)
         {
-            // Private to each thread - no sharing
             std::vector<std::string_view> words_buf;
             std::vector<char> chars_buf;
             words_buf.reserve(WORD_BUFFER_SIZE);
             chars_buf.reserve(CHAR_BUFFER_SIZE);
 
-            // Dynamic scheduling: threads grab next book when done (vs static chunks)
-            // Better for uneven book sizes
             #pragma omp for schedule(dynamic)
             for (int i = 0; i < total_books; ++i) {
                 const auto& filepath = book_files[i];
@@ -505,12 +579,16 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// MAIN
-// User selects thread count, runs benchmark (warm-up + measured),
-// collects statistics, saves results to CSV.
+// MAIN - SoA VERSION
+// Uses SoA throughout. Compare with parallel.cpp (AoS) for performance.
+// Expected: similar or better when accessing one field, worse for all fields.
 //═══════════════════════════════════════════════════════════════
 int main()
 {
+    std::cout << "╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║     PARALLEL N-GRAM ANALYZER - SoA VERSION           ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n\n";
+
     std::string folder_path = "/Users/lorenzocappetti/CLionProjects/Bigrams_Trigrams/book_gutenberg";
 
     if (!fs::exists(folder_path)) {
@@ -533,7 +611,7 @@ int main()
     }
 
     int max_threads = omp_get_max_threads();
-    const int MAX_VIRTUAL_THREADS = 1000;  // Allow oversubscription for testing
+    const int MAX_VIRTUAL_THREADS = 1000;
     int num_threads;
 
     std::cout << "Threads available: " << max_threads << "\n";
@@ -558,30 +636,26 @@ int main()
         break;
     }
 
-    // Benchmark setup: warm-up runs for cache, measured runs for stats
     const int WARMUP_RUNS = 2;
     const int MEASURED_RUNS = 10;
     const int NUM_RUNS = WARMUP_RUNS + MEASURED_RUNS;
 
-    struct RunResult { double wall; double cpu; bool warmup; };
-    std::vector<RunResult> run_times;
-    run_times.reserve(NUM_RUNS);
+    // SoA for benchmark data
+    BenchmarkResultsSoA results;
+    results.reserve(NUM_RUNS);
 
-    // Use unique_ptr to recreate maps each run (ensures clean state)
-    std::unique_ptr<ShardedMap> word_bigrams, word_trigrams, char_bigrams, char_trigrams;
+    std::unique_ptr<ShardedMapSoA> word_bigrams, word_trigrams, char_bigrams, char_trigrams;
 
     for (int run = 0; run < NUM_RUNS; ++run) {
-        // Fresh maps each run for clean measurement
-        word_bigrams = std::make_unique<ShardedMap>();
-        word_trigrams = std::make_unique<ShardedMap>();
-        char_bigrams = std::make_unique<ShardedMap>();
-        char_trigrams = std::make_unique<ShardedMap>();
+        word_bigrams = std::make_unique<ShardedMapSoA>();
+        word_trigrams = std::make_unique<ShardedMapSoA>();
+        char_bigrams = std::make_unique<ShardedMapSoA>();
+        char_trigrams = std::make_unique<ShardedMapSoA>();
 
-        // Wall-clock (real time) and CPU time (sum of all threads)
         auto start_time = std::chrono::high_resolution_clock::now();
         std::clock_t start_cpu = std::clock();
 
-        OptimizedOpenMPProcessor::process_parallel_sharded(
+        OptimizedOpenMPProcessorSoA::process_parallel_sharded(
             book_files,
             *word_bigrams,
             *word_trigrams,
@@ -595,54 +669,22 @@ int main()
         std::chrono::duration<double> elapsed = end_time - start_time;
         double cpu_seconds = double(end_cpu - start_cpu) / double(CLOCKS_PER_SEC);
 
-        run_times.push_back(RunResult{elapsed.count(), cpu_seconds, run < WARMUP_RUNS});
+        // Store in separate arrays
+        results.add_result(elapsed.count(), cpu_seconds, run < WARMUP_RUNS);
 
         std::cout << "[Run " << (run + 1) << "/" << NUM_RUNS << "] "
-                  << std::fixed << std::setprecision(2) << elapsed.count() << "s\n";
+                  << std::fixed << std::setprecision(2) << elapsed.count() << "s"
+                  << (run < WARMUP_RUNS ? " (warmup)" : "") << "\n";
     }
 
-    // Extract measured runs (skip warm-up)
-    std::vector<double> measured_times;
-    std::vector<double> measured_cpu;
-    for (const auto& r : run_times) {
-        if (!r.warmup) {
-            measured_times.push_back(r.wall);
-            measured_cpu.push_back(r.cpu);
-        }
-    }
+    // Compute stats using SoA (iterates only needed arrays)
+    double mean, min_time, max_time, stddev, cv;
+    double mean_cpu, min_cpu, max_cpu, stddev_cpu, cv_cpu;
+    
+    results.compute_wall_stats(mean, min_time, max_time, stddev, cv);
+    results.compute_cpu_stats(mean_cpu, min_cpu, max_cpu, stddev_cpu, cv_cpu);
 
-    // Compute descriptive statistics: mean, min, max, stddev, CV
-    double mean = 0.0, min_time = measured_times[0], max_time = measured_times[0];
-    for (double t : measured_times) {
-        mean += t;
-        min_time = std::min(min_time, t);
-        max_time = std::max(max_time, t);
-    }
-    mean /= measured_times.size();
-
-    double stddev = 0.0;
-    for (double t : measured_times) {
-        stddev += (t - mean) * (t - mean);
-    }
-    stddev = std::sqrt(stddev / measured_times.size());
-    double cv = (stddev / mean) * 100.0;
-
-    double mean_cpu = 0.0, min_cpu = measured_cpu[0], max_cpu = measured_cpu[0];
-    for (double t : measured_cpu) {
-        mean_cpu += t;
-        min_cpu = std::min(min_cpu, t);
-        max_cpu = std::max(max_cpu, t);
-    }
-    mean_cpu /= measured_cpu.size();
-
-    double stddev_cpu = 0.0;
-    for (double t : measured_cpu) {
-        stddev_cpu += (t - mean_cpu) * (t - mean_cpu);
-    }
-    stddev_cpu = std::sqrt(stddev_cpu / measured_cpu.size());
-    double cv_cpu = (stddev_cpu / mean_cpu) * 100.0;
-
-    std::string output_dir = "results/parallel";
+    std::string output_dir = "results/parallel_soa";
     ensure_directory_exists(output_dir);
 
     CSVSaver::save_ngrams(*word_bigrams, output_dir + "/word_bigrams.csv", "Word Bigrams");
@@ -650,33 +692,45 @@ int main()
     CSVSaver::save_ngrams(*char_bigrams, output_dir + "/char_bigrams.csv", "Char Bigrams");
     CSVSaver::save_ngrams(*char_trigrams, output_dir + "/char_trigrams.csv", "Char Trigrams");
 
-    // Save stats to CSV (easier to parse for analysis scripts)
-    std::ofstream stats_file(output_dir + "/performance_stats.csv");
+    std::ofstream stats_file(output_dir + "/performance_stats.txt");
     if (stats_file) {
-        // Header
-        stats_file << "metric,value\n";
-        // Thread info
-        stats_file << "threads," << num_threads << "\n";
-        // Wall-clock time
-        stats_file << "wall_mean," << std::fixed << std::setprecision(6) << mean << "\n";
-        stats_file << "wall_min," << std::fixed << std::setprecision(6) << min_time << "\n";
-        stats_file << "wall_max," << std::fixed << std::setprecision(6) << max_time << "\n";
-        stats_file << "wall_std," << std::fixed << std::setprecision(6) << stddev << "\n";
-        stats_file << "wall_cv," << std::fixed << std::setprecision(6) << cv << "\n";
-        // CPU time (sum of all thread times, typically > wall time for parallel)
-        stats_file << "cpu_mean," << std::fixed << std::setprecision(6) << mean_cpu << "\n";
-        stats_file << "cpu_min," << std::fixed << std::setprecision(6) << min_cpu << "\n";
-        stats_file << "cpu_max," << std::fixed << std::setprecision(6) << max_cpu << "\n";
-        stats_file << "cpu_std," << std::fixed << std::setprecision(6) << stddev_cpu << "\n";
-        stats_file << "cpu_cv," << std::fixed << std::setprecision(6) << cv_cpu << "\n";
-        // N-gram counts (should match sequential version for correctness)
-        stats_file << "word_bigrams," << word_bigrams->total_unique() << "\n";
-        stats_file << "word_trigrams," << word_trigrams->total_unique() << "\n";
-        stats_file << "char_bigrams," << char_bigrams->total_unique() << "\n";
-        stats_file << "char_trigrams," << char_trigrams->total_unique() << "\n";
+        stats_file << "PERFORMANCE SUMMARY - SoA VERSION (" << MEASURED_RUNS << " runs)\n";
+        stats_file << "Threads: " << num_threads << "\n\n";
+        
+        stats_file << "WALL-CLOCK TIME:\n";
+        stats_file << "  Mean: " << std::fixed << std::setprecision(3) << mean << " s\n";
+        stats_file << "  Min:  " << min_time << " s\n";
+        stats_file << "  Max:  " << max_time << " s\n";
+        stats_file << "  Std:  " << stddev << " s\n";
+        stats_file << "  CV:   " << std::setprecision(2) << cv << " %\n\n";
+        
+        stats_file << "CPU TIME:\n";
+        stats_file << "  Mean: " << std::setprecision(3) << mean_cpu << " s\n";
+        stats_file << "  Min:  " << min_cpu << " s\n";
+        stats_file << "  Max:  " << max_cpu << " s\n";
+        stats_file << "  Std:  " << stddev_cpu << " s\n";
+        stats_file << "  CV:   " << std::setprecision(2) << cv_cpu << " %\n\n";
+        
+        stats_file << "N-GRAM STATISTICS:\n";
+        stats_file << "  Word Bigrams:  " << word_bigrams->total_unique() << "\n";
+        stats_file << "  Word Trigrams: " << word_trigrams->total_unique() << "\n";
+        stats_file << "  Char Bigrams:  " << char_bigrams->total_unique() << "\n";
+        stats_file << "  Char Trigrams: " << char_trigrams->total_unique() << "\n";
+        stats_file << "\n";
+        stats_file << "DATA LAYOUT: Structure of Arrays (SoA)\n";
+        stats_file << "Compare with parallel.cpp (AoS) to see layout impact on performance.\n";
+        stats_file << "Compare with parallel.cpp (AoS) to see layout impact on performance.\n";
         stats_file.close();
-        std::cout << "\nPerformance statistics saved to " << output_dir << "/performance_stats.csv\n";
+        std::cout << "\nPerformance statistics saved to " << output_dir << "/performance_stats.txt\n";
     }
+
+    // Stampa sommario a console
+    std::cout << "\n╔═══════════════════════════════════════════════════════╗\n";
+    std::cout << "║                    SUMMARY                            ║\n";
+    std::cout << "╠═══════════════════════════════════════════════════════╣\n";
+    std::cout << "║ Mean Wall Time: " << std::setw(10) << std::fixed << std::setprecision(3) << mean << " s                       ║\n";
+    std::cout << "║ Mean CPU Time:  " << std::setw(10) << std::fixed << std::setprecision(3) << mean_cpu << " s                       ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════╝\n";
 
     return 0;
 }

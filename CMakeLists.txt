@@ -45,6 +45,7 @@ add_executable(correctness_check correctness_check.cpp)
 add_executable(test_correctness test_correctness.cpp)
 add_executable(seq seq.cpp)
 add_executable(parallel parallel.cpp)
+add_executable(parallel_soa parallel_soa.cpp)
 
 # Link delle librerie necessarie
 if(APPLE)
@@ -52,12 +53,14 @@ if(APPLE)
     target_link_libraries(correctness_check omp pthread)
     target_link_libraries(seq omp pthread)
     target_link_libraries(parallel omp pthread)
+    target_link_libraries(parallel_soa omp pthread)
 else()
     find_package(Threads REQUIRED)
     target_link_libraries(test_correctness OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(correctness_check OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(seq OpenMP::OpenMP_CXX Threads::Threads)
     target_link_libraries(parallel OpenMP::OpenMP_CXX Threads::Threads)
+    target_link_libraries(parallel_soa OpenMP::OpenMP_CXX Threads::Threads)
 endif()
 
 # Target personalizzati
@@ -73,7 +76,7 @@ add_custom_target(run-test
 )
 
 # Install targets (solo quelli esistenti)
-install(TARGETS test_correctness correctness_check seq parallel DESTINATION bin)
+install(TARGETS test_correctness correctness_check seq parallel parallel_soa DESTINATION bin)
 
 # Print configuration info
 message(STATUS "")

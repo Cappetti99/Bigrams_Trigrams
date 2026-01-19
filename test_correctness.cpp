@@ -1,8 +1,9 @@
-//
-// Test di correttezza COMPLETO - Lorenzo Cappetti, 2025
+// Test di correttezza - Lorenzo Cappetti, 2025
 // Verifica che tutti e 3 i programmi producano gli stessi risultati
 // Compila ed esegue automaticamente i 3 programmi su test_file.txt e confronta i risultati
 //
+// Automated test runner: compiles all three implementations, runs them on a known
+// test file, and verifies outputs match expected values + each other (no regressions)
 
 #include <iostream>
 #include <fstream>
@@ -17,11 +18,13 @@
 #include <memory>
 #include <stdexcept>
 
-//═══════════════════════════════════════════════════════════════
+// ============================================================================
 // UTILITY FUNCTIONS
-//═══════════════════════════════════════════════════════════════
+// ============================================================================
 
-// Esegue un comando shell e cattura l'output
+// Shell command execution with output capture (used for compilation and running programs)
+/// @param cmd Command to execute
+/// @return stdout as string
 std::string exec_command(const char* cmd) {
     std::array<char, 128> buffer;
     std::string result;
@@ -35,12 +38,14 @@ std::string exec_command(const char* cmd) {
     return result;
 }
 
-// Estrae un valore numerico da una stringa (es: "Total unique: 34" -> 34)
+// Extract first numeric value from a string (e.g., "Total unique: 34" -> 34)
+// Simple parsing: scan for digit sequences, return first match
+/// @param line String containing numbers
+/// @return First number found, or 0 if none
 size_t extract_number(const std::string& line) {
     std::istringstream iss(line);
     std::string word;
     while (iss >> word) {
-        // Rimuovi caratteri non numerici
         std::string clean_word;
         for (char c : word) {
             if (std::isdigit(c)) clean_word += c;
@@ -52,23 +57,29 @@ size_t extract_number(const std::string& line) {
     return 0;
 }
 
-// Struttura per le statistiche
+// Metrics extracted from program output for verification
+// We check both unique counts (correctness) and top items (consistency)
 struct Stats {
     size_t word_bigrams_unique = 0;
     size_t word_trigrams_unique = 0;
     size_t char_bigrams_unique = 0;
     size_t char_trigrams_unique = 0;
-    std::string top_word_bigram;
+    std::string top_word_bigram;        // Most frequent (for sanity check)
     size_t top_word_bigram_freq = 0;
-    std::string top_char_trigram;
+    std::string top_char_trigram;       // Most frequent (for sanity check)
     size_t top_char_trigram_freq = 0;
 };
 
+// Parse program stdout to extract statistics (counts and top n-grams)
+// Uses state machine to track which section we're reading (Word Bigrams, Char Trigrams, etc.)
+/// @param output Complete program output
+/// @return Stats struct with extracted values
 Stats parse_output(const std::string& output) {
     Stats stats;
     std::istringstream iss(output);
     std::string line;
 
+    // State machine: track current output section for context-aware parsing
     bool in_word_bigrams = false;
     bool in_word_trigrams = false;
     bool in_char_bigrams = false;
@@ -77,7 +88,7 @@ Stats parse_output(const std::string& output) {
     bool got_first_ct = false;
 
     while (std::getline(iss, line)) {
-        // Rileva sezioni
+        // Detect section headers to update state (case-insensitive matching)
         if (line.find("Word Bigrams") != std::string::npos ||
             line.find("WORD BIGRAMS") != std::string::npos) {
             in_word_bigrams = true;
@@ -96,18 +107,19 @@ Stats parse_output(const std::string& output) {
             in_word_bigrams = in_word_trigrams = in_char_bigrams = false;
         }
 
-        // Estrai unique counts
+        // Extract unique counts from lines like "Total unique: 34" or "Unique Word Bigrams: 34"
+        // Try explicit labels first, then fall back to context from current section
         if (line.find("Total unique") != std::string::npos ||
             line.find("unique)") != std::string::npos ||
             line.find("Unique Word Bigrams") != std::string::npos ||
             line.find("Unique Word Trigrams") != std::string::npos ||
             line.find("Unique Char Bigrams") != std::string::npos ||
             line.find("Unique Char Trigrams") != std::string::npos ||
-            line.find("n-grams saved to") != std::string::npos) { // Added support for new format
+            line.find("n-grams saved to") != std::string::npos) {
 
             size_t num = extract_number(line);
 
-            // Prova a identificare il tipo in base al contesto della linea
+            // Identifica il tipo di n-gram dal contesto della linea
             if ((line.find("Word Bigram") != std::string::npos || line.find("Word Bigrams") != std::string::npos) && stats.word_bigrams_unique == 0) {
                 stats.word_bigrams_unique = num;
             } else if ((line.find("Word Trigram") != std::string::npos || line.find("Word Trigrams") != std::string::npos) && stats.word_trigrams_unique == 0) {
@@ -117,7 +129,7 @@ Stats parse_output(const std::string& output) {
             } else if ((line.find("Char Trigram") != std::string::npos || line.find("Char Trigrams") != std::string::npos) && stats.char_trigrams_unique == 0) {
                 stats.char_trigrams_unique = num;
             } else if (num > 0) {
-                // Fallback: usa lo stato della sezione
+
                 if (in_word_bigrams && stats.word_bigrams_unique == 0) {
                     stats.word_bigrams_unique = num;
                 } else if (in_word_trigrams && stats.word_trigrams_unique == 0) {
@@ -130,7 +142,8 @@ Stats parse_output(const std::string& output) {
             }
         }
 
-        // Estrai top n-grams (primo della lista)
+        // Extract top n-gram from numbered list: 1. "hello world" -> 42
+        // Used for sanity checking (should be consistent across runs)
         if (line.find(". \"") != std::string::npos) {
             size_t first_quote = line.find("\"");
             size_t second_quote = line.find("\"", first_quote + 1);
@@ -138,7 +151,7 @@ Stats parse_output(const std::string& output) {
             if (first_quote != std::string::npos && second_quote != std::string::npos) {
                 std::string ngram = line.substr(first_quote + 1, second_quote - first_quote - 1);
 
-                // Trova la frequenza
+                // Parse frequency (handles both "42 occurrences" and "-> 42" formats)
                 size_t freq = 0;
                 size_t occ_pos = line.find("occurrences");
                 if (occ_pos != std::string::npos) {
@@ -187,9 +200,9 @@ Stats parse_output(const std::string& output) {
     return stats;
 }
 
-//═══════════════════════════════════════════════════════════════
-// MAIN
-//═══════════════════════════════════════════════════════════════
+// ============================================================================
+// MAIN - Test orchestration (5 phases: setup, compile, run, compare, cleanup)
+// ============================================================================
 int main() {
     std::cout << "N-GRAM CORRECTNESS TEST\n\n";
 
@@ -200,21 +213,20 @@ int main() {
 
     std::cout << "PHASE 1: Environment Setup\n";
 
-    // Backup temporaneo di tutti i libri
+    // Isolate test: move all books away, use only known test_file.txt
+    // (ensures predictable input regardless of book collection state)
     std::cout << "   Backing up books...\n";
     std::string mkdir_cmd = "mkdir -p " + temp_dir;
     system(mkdir_cmd.c_str());
     std::string mv_cmd = "cd " + base_path + "/book_gutenberg && mv libro_*.txt temp_backup/ 2>/dev/null || true";
     system(mv_cmd.c_str());
 
-    // Copia il test file da test_data a book_gutenberg
     std::cout << "   Copying test_file.txt...\n";
     std::string cp_cmd = "cp " + test_file_source + " " + test_file_dest;
     system(cp_cmd.c_str());
 
     std::cout << "   Test file ready.\n\n";
 
-    // Verifica che test_file.txt sia stato copiato
     std::ifstream test_check(test_file_dest);
     if (!test_check) {
         std::cerr << "   Error: test_file.txt not copied!\n";
@@ -224,15 +236,17 @@ int main() {
 
     std::cout << "PHASE 2: Compilation\n";
 
+    // Configuration for each program variant to test
     struct Program {
-        std::string name;
-        std::string source;
-        std::string binary;
-        std::string compile_cmd;
-        bool needs_openmp;
+        std::string name;        // Display name (seq, parallel, hybrid)
+        std::string source;      // Source file (seq.cpp, parallel.cpp, etc.)
+        std::string binary;      // Test binary name (avoids overwriting production builds)
+        std::string compile_cmd; // Full clang++ command with flags
+        bool needs_openmp;       // If true, pipe "4" as thread count during execution
     };
 
-    // Prima verifica quali file .cpp esistono nella directory
+    // Auto-detect which implementations exist (seq, parallel, SoA)
+    // Avoids hardcoding filenames (flexible if files renamed/missing)
     std::cout << "   Searching source files...\n";
 
     std::vector<std::string> available_sources;
@@ -248,19 +262,17 @@ int main() {
 
     std::vector<Program> programs;
 
-    // seq.cpp (sempre presente)
     if (std::find(available_sources.begin(), available_sources.end(), "seq.cpp") != available_sources.end()) {
         programs.push_back({"seq", "seq.cpp", "seq_test",
                            "clang++ -std=c++17 -O2 seq.cpp -o seq_test 2>&1", false});
     }
 
-    // parallel.cpp (se esiste)
     if (std::find(available_sources.begin(), available_sources.end(), "parallel.cpp") != available_sources.end()) {
         programs.push_back({"parallel", "parallel.cpp", "parallel_test",
                            "clang++ -std=c++17 -O2 -Xpreprocessor -fopenmp parallel.cpp -lomp -o parallel_test -I/opt/homebrew/opt/libomp/include -L/opt/homebrew/opt/libomp/lib 2>&1", true});
     }
 
-    // Cerca varianti del file hybrid
+    // Cerca varianti del file hybrid (possibili nomi diversi del file SoA)
     std::vector<std::string> hybrid_variants = {
         "parallel_AoS_SoA.cpp",
         "hybrid.cpp",
@@ -283,7 +295,7 @@ int main() {
 
     std::cout << "   Found " << programs.size() << " programs to test\n\n";
 
-
+    // Compile all discovered programs with error detection
     for (auto& prog : programs) {
         std::cout << "   Compiling " << prog.name << "...\n";
         std::string cmd = "cd " + base_path + " && " + prog.compile_cmd;
@@ -293,7 +305,7 @@ int main() {
             std::cerr << "   Compilation error " << prog.name << ":\n";
             std::cerr << result << "\n";
 
-            // Ripristina i file
+            // Critical: restore environment before early exit (no leftover state)
             std::string restore = "cd " + base_path + "/book_gutenberg && mv temp_backup/* . 2>/dev/null || true && rmdir temp_backup 2>/dev/null || true";
             system(restore.c_str());
             return 1;
@@ -306,12 +318,13 @@ int main() {
 
     std::vector<Stats> all_stats;
 
+    // Run each compiled program and capture stdout for parsing
     for (auto& prog : programs) {
         std::cout << "   Running " << prog.name << "...\n";
 
         std::string run_cmd;
         if (prog.needs_openmp) {
-            // Fornisci input automatico: 4 thread
+            // OpenMP versions ask for thread count: pipe "4" as input
             run_cmd = "cd " + base_path + " && echo '4' | ./" + prog.binary + " 2>&1";
         } else {
             run_cmd = "cd " + base_path + " && ./" + prog.binary + " 2>&1";
@@ -319,7 +332,6 @@ int main() {
 
         std::string output = exec_command(run_cmd.c_str());
 
-        // Parse output
         Stats stats = parse_output(output);
         all_stats.push_back(stats);
 
@@ -342,7 +354,8 @@ int main() {
 
     bool all_match = true;
 
-    // Confronta con i valori attesi
+    // Ground truth: manually verified counts from test_file.txt
+    // Any deviation = bug (either in logic or test file changed)
     const size_t EXPECTED_WB = 34;
     const size_t EXPECTED_WT = 37;
     const size_t EXPECTED_CB = 91;
@@ -352,6 +365,7 @@ int main() {
     const std::string EXPECTED_TOP_CT = "the";
     const size_t EXPECTED_TOP_CT_FREQ = 8;
 
+    // Check each program against expected values (absolute correctness)
     for (size_t i = 0; i < programs.size(); ++i) {
         std::cout << "\n   Verifying " << programs[i].name << ":\n";
 
@@ -389,8 +403,8 @@ int main() {
             std::cout << "      Char Trigrams: OK\n";
         }
 
-        // Verifica top n-grams (informativo)
-        // Verifica top n-grams (informativo - opzionale)
+        // Top n-gram check (informational only, doesn't fail test)
+        // Useful for spotting sorting or tie-breaking issues
         if (!all_stats[i].top_word_bigram.empty()) {
              if (all_stats[i].top_word_bigram == EXPECTED_TOP_WB &&
                 all_stats[i].top_word_bigram_freq == EXPECTED_TOP_WB_FREQ) {
@@ -418,7 +432,8 @@ int main() {
         }
     }
 
-    // Confronto tra programmi
+    // Cross-program consistency: all implementations must agree with each other
+    // Catches regressions (e.g., parallel version drifts from sequential baseline)
     std::cout << "\n   Comparing consistency:\n";
     bool programs_agree = true;
 
@@ -440,17 +455,16 @@ int main() {
     std::cout << "\n";
     std::cout << "PHASE 5: Cleanup\n";
 
-    // Rimuovi test file da book_gutenberg
+    // Restore original state: no leftover test artifacts
     std::cout << "   Removing temp files...\n";
     std::string rm_test = "rm -f " + test_file_dest;
     system(rm_test.c_str());
 
-    // Ripristina i libri
     std::cout << "   Restoring books...\n";
     std::string restore = "cd " + base_path + "/book_gutenberg && mv temp_backup/* . 2>/dev/null || true && rmdir temp_backup 2>/dev/null || true";
     system(restore.c_str());
 
-    // Rimuovi binari di test
+    // Pulizia binari di test
     for (const auto& prog : programs) {
         std::string rm_cmd = "rm -f " + base_path + "/" + prog.binary;
         system(rm_cmd.c_str());
@@ -458,7 +472,7 @@ int main() {
 
     std::cout << "   Environment restored\n\n";
 
-    // Risultato finale
+    // Final verdict: need both absolute correctness AND cross-program consistency
     if (all_match && programs_agree) {
         std::cout << "[SUCCESS] All programs correct and consistent.\n";
     } else if (programs_agree && !all_match) {
