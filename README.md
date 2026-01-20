@@ -2,177 +2,177 @@
 
 **Lorenzo Cappetti, 2025**
 
-Analizzatore di n-gram (bigrammi e trigrammi) per testi in linguaggio naturale con implementazioni sequenziale e parallela OpenMP. Il progetto analizza una collezione di 80+ libri da Project Gutenberg (~170 MB di testo) per estrarre e contare word bigrams, word trigrams, character bigrams e character trigrams.
+N-gram analyzer (bigrams and trigrams) for natural language texts with sequential and parallel OpenMP implementations. The project analyzes a collection of 80+ books from Project Gutenberg (~170 MB of text) to extract and count word bigrams, word trigrams, character bigrams, and character trigrams.
 
 ---
 
-## 📋 Descrizione del Progetto
+## 📋 Project Description
 
-Questo progetto implementa un sistema di analisi testuale che:
+This project implements a text analysis system that:
 
-1. **Processa testi** da Project Gutenberg rimuovendo header/footer e normalizzando il contenuto
-2. **Estrae n-gram** (sequenze di n parole o caratteri consecutivi)
-3. **Conta le frequenze** di ogni n-gram unico
-4. **Confronta performance** tra implementazione sequenziale e parallela (OpenMP)
-5. **Verifica la correttezza** dei risultati tra le due versioni
-6. **Genera benchmark** automatici con misurazioni di tempo e speedup
+1. **Processes texts** from Project Gutenberg by removing headers/footers and normalizing content
+2. **Extracts n-grams** (sequences of n consecutive words or characters)
+3. **Counts frequencies** of each unique n-gram
+4. **Compares performance** between sequential and parallel implementations (OpenMP)
+5. **Verifies correctness** of results between the two versions
+6. **Generates benchmarks** automatically with time measurements and speedup
 
-### Tipi di N-gram Analizzati
+### Types of N-grams Analyzed
 
-- **Word Bigrams**: coppie di parole consecutive (es. "the cat", "cat sat")
-- **Word Trigrams**: triple di parole consecutive (es. "the cat sat")
-- **Character Bigrams**: coppie di caratteri consecutivi (es. "th", "he")
-- **Character Trigrams**: triple di caratteri consecutivi (es. "the", "cat")
+- **Word Bigrams**: consecutive word pairs (e.g., "the cat", "cat sat")
+- **Word Trigrams**: consecutive word triples (e.g., "the cat sat")
+- **Character Bigrams**: consecutive character pairs (e.g., "th", "he")
+- **Character Trigrams**: consecutive character triples (e.g., "the", "cat")
 
 ---
 
-## 🗂️ Struttura del Progetto
+## 🗂️ Project Structure
 
 ```
 Bigrams_Trigrams/
-├── bigram_seq.cpp              # Implementazione sequenziale
-├── bigram_par.cpp              # Implementazione parallela (OpenMP)
-├── correctness_check.cpp       # Verifica correttezza seq vs par
-├── test_correctness.cpp        # Test su dataset ridotto
-├── par_SoA_AoS.cpp            # Benchmark SoA vs AoS
-├── CMakeLists.txt             # Configurazione build
-├── README.md                  # Questa guida
-├── todo.txt                   # Task e ottimizzazioni
+├── bigram_seq.cpp              # Sequential implementation
+├── bigram_par.cpp              # Parallel implementation (OpenMP)
+├── correctness_check.cpp       # Correctness verification seq vs par
+├── test_correctness.cpp        # Tests on reduced dataset
+├── par_SoA_AoS.cpp            # SoA vs AoS benchmark
+├── CMakeLists.txt             # Build configuration
+├── README.md                  # This guide
+├── todo.txt                   # Tasks and optimizations
 │
-├── book_gutenberg/            # Dataset: 80+ libri da Project Gutenberg
+├── book_gutenberg/            # Dataset: 80+ books from Project Gutenberg
 │   ├── libro_100.txt
 │   ├── libro_105.txt
 │   └── ...
 │
-├── test/                      # Directory per test
-│   ├── output_sequential/     # Output test seq
-│   ├── output_parallel/       # Output test par
-│   └── output_hybrid/         # Output test hybrid
+├── test/                      # Test directory
+│   ├── output_sequential/     # Sequential test output
+│   ├── output_parallel/       # Parallel test output
+│   └── output_hybrid/         # Hybrid test output
 │
-├── test_data/                 # Dataset ridotto per testing
+├── test_data/                 # Reduced dataset for testing
 │   └── test_file.txt
 │
-├── build/                     # Directory build (generata)
+├── build/                     # Build directory (generated)
 │   ├── bigram_seq
 │   ├── bigram_par
 │   ├── correctness_check
 │   ├── test_correctness
 │   └── par_SoA_AoS
 │
-└── cmake-build-debug/         # Build CLion (generata)
+└── cmake-build-debug/         # CLion build (generated)
     ├── bigram_seq
     ├── bigram_par
     ├── correctness_check
     ├── test_correctness
     ├── par_SoA_AoS
-    ├── output_sequential/     # Output produzione seq
-    ├── output_parallel/       # Output produzione par
-    └── output_hybrid/         # Output test hybrid
+    ├── output_sequential/     # Sequential production output
+    ├── output_parallel/       # Parallel production output
+    └── output_hybrid/         # Hybrid test output
 ```
 
 ---
 
-## Architettura del Codice
+## Code Architecture
 
-### Componenti Principali
+### Main Components
 
 #### 1. **TextCleaner**
-Rimuove metadata di Project Gutenberg:
-- Header con licenze e informazioni (`*** START OF...`)
-- Footer con disclaimer (`*** END OF...`)
-- Indice dei contenuti (`Contents`, `CONTENTS`, `Chapter I`, etc.)
-- Linee di separazione decorative
+Removes Project Gutenberg metadata:
+- Headers with licenses and information (`*** START OF...`)
+- Footers with disclaimers (`*** END OF...`)
+- Table of contents (`Contents`, `CONTENTS`, `Chapter I`, etc.)
+- Decorative separator lines
 
-**Funzionamento**: Scansione line-by-line con regex matching per identificare e rimuovere sezioni di metadati.
+**Operation**: Line-by-line scanning with regex matching to identify and remove metadata sections.
 
 #### 2. **Tokenizer**
-Normalizza e tokenizza il testo:
-- Conversione a minuscolo con lookup table ottimizzata
-- Rimozione numeri e cifre
-- Gestione caratteri UTF-8 (accenti → lettere base)
-- Rimozione/sostituzione punteggiatura
-- Tokenizzazione in parole (split su whitespace) o caratteri
+Normalizes and tokenizes text:
+- Lowercase conversion with optimized lookup table
+- Number and digit removal
+- UTF-8 character handling (accents → base letters)
+- Punctuation removal/replacement
+- Tokenization into words (split on whitespace) or characters
 
-**Ottimizzazioni**: 
-- Lookup table statica per `tolower()` (~2x più veloce)
-- UTF-8 inline processing senza librerie esterne
-- Pre-allocazione capacità stringhe basata su dimensione input
+**Optimizations**: 
+- Static lookup table for `tolower()` (~2x faster)
+- UTF-8 inline processing without external libraries
+- String capacity pre-allocation based on input size
 
 #### 3. **NgramExtractor**
-Estrae n-gram da sequenze di token:
-- Template generico per `std::string` (word) e `char` (character)
-- Sliding window efficiente su vettore di token
-- Costruzione chiavi ottimizzata (separatore spazio per word, nessun separatore per char)
-- Conteggio frequenze inline durante estrazione
+Extracts n-grams from token sequences:
+- Generic template for `std::string` (word) and `char` (character)
+- Efficient sliding window over token vector
+- Optimized key construction (space separator for words, no separator for chars)
+- Inline frequency counting during extraction
 
-**Complessità**: O(n) dove n = numero di token
+**Complexity**: O(n) where n = number of tokens
 
 #### 4. **FrequencyCounter**
-Gestisce le mappe di frequenza:
+Manages frequency maps:
 - Storage in `std::unordered_map<std::string, size_t>`
-- Merge di risultati parziali (thread-local → globale)
-- Ordinamento per frequenza decrescente
-- Export in formato CSV con escaping corretto
-- Top-K extraction per analisi rapida
+- Merging of partial results (thread-local → global)
+- Sorting by descending frequency
+- CSV export with proper escaping
+- Top-K extraction for quick analysis
 
-#### 5. **OpenMPProcessor** (solo parallelo)
-Orchestrazione parallela:
-- Distribuzione libri tra thread con `dynamic` scheduling
-- Mappe locali per thread (evita lock contention)
-- Merge parallelo gerarchico dei risultati
-- Sincronizzazione con `#pragma omp critical` solo dove necessario
+#### 5. **OpenMPProcessor** (parallel only)
+Parallel orchestration:
+- Book distribution among threads with `dynamic` scheduling
+- Thread-local maps (avoids lock contention)
+- Hierarchical parallel merge of results
+- Synchronization with `#pragma omp critical` only where necessary
 
-**Strategia**: Ogni thread processa libri interi in modo indipendente, poi merge finale parallelizzato.
+**Strategy**: Each thread processes entire books independently, then parallelized final merge.
 
 ---
 
-## Compilazione
+## Compilation
 
-### Requisiti
-- **C++17** o superiore (per `std::filesystem`)
+### Requirements
+- **C++17** or higher (for `std::filesystem`)
 - **CMake** 3.12+
 - **OpenMP** 4.5+
-  - Su macOS: `brew install libomp`
-  - Su Linux: GCC/Clang con OpenMP integrato
-- **GCC/Clang** con supporto OpenMP
+  - On macOS: `brew install libomp`
+  - On Linux: GCC/Clang with integrated OpenMP
+- **GCC/Clang** with OpenMP support
 
-### Build con CMake
+### Build with CMake
 
 ```bash
-# Crea directory build
+# Create build directory
 mkdir build && cd build
 
-# Configura
+# Configure
 cmake ..
 
-# Compila (4 thread)
+# Compile (4 threads)
 make -j4
 ```
 
-### Build con CLion
+### Build with CLion
 
 ```bash
-# Build completo
+# Full build
 cmake --build cmake-build-debug --target all -j 4
 
-# Oppure usa il bottone Build in CLion
+# Or use the Build button in CLion
 ```
 
-### Eseguibili Generati
+### Generated Executables
 
-| Eseguibile           | Descrizione                                           |
+| Executable           | Description                                           |
 |----------------------|-------------------------------------------------------|
-| `bigram_seq`         | Versione sequenziale completa                          |
-| `bigram_par`         | Versione parallela completa (OpenMP)                   |
-| `correctness_check`  | Verifica correttezza seq vs par su output completo     |
-| `test_correctness`   | Test rapido su dataset ridotto                         |
-| `par_SoA_AoS`        | Benchmark confronto Structure of Arrays vs Array of Structs |
+| `bigram_seq`         | Full sequential version                                |
+| `bigram_par`         | Full parallel version (OpenMP)                         |
+| `correctness_check`  | Correctness verification seq vs par on full output     |
+| `test_correctness`   | Quick test on reduced dataset                          |
+| `par_SoA_AoS`        | Benchmark comparing Structure of Arrays vs Array of Structs |
 
 ---
 
-## 📖 Utilizzo
+## 📖 Usage
 
-### 1. Esecuzione Versione Sequenziale
+### 1. Running Sequential Version
 
 ```bash
 cd build
@@ -185,9 +185,9 @@ cd build
 - `output_sequential/char_bigrams_seq.csv`
 - `output_sequential/char_trigrams_seq.csv`
 
-**Tempo stimato**: ~110 secondi (su dataset completo, single thread)
+**Estimated time**: ~110 seconds (on full dataset, single thread)
 
-### 2. Esecuzione Versione Parallela
+### 2. Running Parallel Version
 
 ```bash
 cd build
@@ -200,42 +200,42 @@ cd build
 - `output_parallel/char_bigrams_par.csv`
 - `output_parallel/char_trigrams_par.csv`
 
-**Tempo stimato**: ~27 secondi (Apple M1 Pro, 8 thread)
+**Estimated time**: ~27 seconds (Apple M1 Pro, 8 threads)
 
-**Configurazione thread**: Impostare variabile ambiente
+**Thread configuration**: Set environment variable
 ```bash
 export OMP_NUM_THREADS=8
 ./bigram_par
 ```
 
-### 3. Verifica Correttezza
+### 3. Correctness Verification
 
 ```bash
 cd build
 ./correctness_check [seq_dir] [par_dir] [verbose]
 ```
 
-**Esempio**:
+**Example**:
 ```bash
-# Usa directory di default
+# Use default directories
 ./correctness_check
 
-# Directory personalizzate
+# Custom directories
 ./correctness_check output_sequential output_parallel verbose
 ```
 
-**Output**: Report dettagliato con:
-- Numero di n-gram unici per tipo
-- Conteggi totali
-- Matches perfetti vs errori
-- Accuracy percentuale
-- Esempi di discrepanze (se presenti)
+**Output**: Detailed report with:
+- Number of unique n-grams per type
+- Total counts
+- Perfect matches vs errors
+- Accuracy percentage
+- Discrepancy examples (if present)
 
-**Formato Output**:
+**Output Format**:
 ```
 ╔═══════════════════════════════════════════════════════╗
 ║           CORRECTNESS CHECK ANALYZER                  ║
-║           Confronto SEQ vs PARALLEL                   ║
+║           SEQ vs PARALLEL Comparison                  ║
 ╚═══════════════════════════════════════════════════════╝
 
 ┌─────────────────────────────────────────────────────┐
@@ -243,37 +243,37 @@ cd build
 ├─────────────────────────────────────────────────────┤
 │ Unique ngrams (seq):                      2,234,567 │
 │ Unique ngrams (par):                      2,234,567 │
-│ Matches perfetti:                         2,234,567 │
+│ Perfect matches:                          2,234,567 │
 │ Freq. mismatches:                                 0 │
 │ Accuracy:                                  100.0000% │
-│ Status:                              ✓ CORRETTO     │
+│ Status:                              ✓ CORRECT      │
 └─────────────────────────────────────────────────────┘
 ```
 
-### 4. Test Rapido su Dataset Ridotto
+### 4. Quick Test on Reduced Dataset
 
 ```bash
 cd build
 ./test_correctness
 ```
 
-Esegue test su `test_data/test_file.txt` (dataset piccolo) per verifica rapida.
+Runs tests on `test_data/test_file.txt` (small dataset) for quick verification.
 
-**Utile per**:
-- Debug modifiche al codice
-- Verifica compilazione corretta
-- Test in CI/CD pipeline
+**Useful for**:
+- Debugging code changes
+- Verifying correct compilation
+- Testing in CI/CD pipeline
 
-### 5. Benchmark SoA vs AoS
+### 5. SoA vs AoS Benchmark
 
 ```bash
 cd build
 ./par_SoA_AoS
 ```
 
-Confronta performance tra:
-- **Structure of Arrays (SoA)**: vettori separati per ogni campo
-- **Array of Structures (AoS)**: vettore di struct
+Compares performance between:
+- **Structure of Arrays (SoA)**: separate vectors for each field
+- **Array of Structures (AoS)**: vector of structs
 
 ---
 
@@ -319,13 +319,13 @@ Confronta performance tra:
 
 **Collo di bottiglia**: Merge risultati (poco parallelizzabile)
 
-### Risultati Analisi N-gram
+### N-gram Analysis Results
 
 #### Word Bigrams
-| Metrica              | Valore                |
+| Metric               | Value                 |
 |----------------------|-----------------------|
-| N-gram unici         | 2,234,567             |
-| Occorrenze totali    | 11,367,892            |
+| Unique n-grams       | 2,234,567             |
+| Total occurrences    | 11,367,892            |
 | Top 1                | "of the" (71,108)     |
 | Top 2                | "in the" (47,011)     |
 | Top 3                | "to the" (32,617)     |
@@ -333,10 +333,10 @@ Confronta performance tra:
 | Top 5                | "and the" (22,190)    |
 
 #### Word Trigrams
-| Metrica              | Valore                  |
+| Metric               | Value                   |
 |----------------------|-------------------------|
-| N-gram unici         | 6,789,234               |
-| Occorrenze totali    | 11,367,892              |
+| Unique n-grams       | 6,789,234               |
+| Total occurrences    | 11,367,892              |
 | Top 1                | "i don t" (3,057)       |
 | Top 2                | "out of the" (2,715)    |
 | Top 3                | "one of the" (2,702)    |
@@ -344,10 +344,10 @@ Confronta performance tra:
 | Top 5                | "it was a" (1,804)      |
 
 #### Character Bigrams
-| Metrica              | Valore                |
+| Metric               | Value                 |
 |----------------------|-----------------------|
-| N-gram unici         | 664                   |
-| Occorrenze totali    | 48,234,567            |
+| Unique n-grams       | 664                   |
+| Total occurrences    | 48,234,567            |
 | Top 1                | "th" (1,572,497)      |
 | Top 2                | "he" (1,376,347)      |
 | Top 3                | "er" (865,018)        |
@@ -355,10 +355,10 @@ Confronta performance tra:
 | Top 5                | "an" (825,943)        |
 
 #### Character Trigrams
-| Metrica              | Valore                |
+| Metric               | Value                 |
 |----------------------|-----------------------|
-| N-gram unici         | 11,743                |
-| Occorrenze totali    | 48,234,567            |
+| Unique n-grams       | 11,743                |
+| Total occurrences    | 48,234,567            |
 | Top 1                | "the" (938,358)       |
 | Top 2                | "and" (449,906)       |
 | Top 3                | "ing" (325,729)       |
@@ -367,73 +367,73 @@ Confronta performance tra:
 
 ---
 
-## ✅ Verifica Correttezza
+## ✅ Correctness Verification
 
-Il programma `correctness_check.cpp` implementa un sistema completo di verifica che confronta i risultati tra versione sequenziale e parallela.
+The `correctness_check.cpp` program implements a complete verification system that compares results between sequential and parallel versions.
 
-### Metriche Verificate
+### Verified Metrics
 
-1. **Conteggio n-gram unici**: Stesso numero in seq e par
-2. **Frequenze identiche**: Ogni n-gram ha lo stesso conteggio
-3. **Nessun n-gram mancante**: Nessun n-gram presente solo in una versione
-4. **Totali corretti**: Somma frequenze identica
+1. **Unique n-gram count**: Same number in seq and par
+2. **Identical frequencies**: Each n-gram has the same count
+3. **No missing n-grams**: No n-gram present only in one version
+4. **Correct totals**: Identical frequency sum
 
-### Report Generato
+### Generated Report
 
 ```
 ╔═══════════════════════════════════════════════════════╗
 ║        ✓✓✓ CORRECTNESS CHECK PASSED ✓✓✓               ║
 ║                                                       ║
-║   La versione parallela produce risultati IDENTICI    ║
-║              alla versione sequenziale!               ║
+║   The parallel version produces IDENTICAL results     ║
+║              to the sequential version!               ║
 ╚═══════════════════════════════════════════════════════╝
 
- Statistiche complessive:
-   • Ngrams totali verificati: 9,036,208
-   • Matches perfetti:         9,036,208
-   • Errori totali:            0
-   • Accuracy complessiva:     100.0000%
+ Overall statistics:
+   • Total ngrams verified:    9,036,208
+   • Perfect matches:          9,036,208
+   • Total errors:             0
+   • Overall accuracy:         100.0000%
 ```
 
-### Come Funziona il Checker
+### How the Checker Works
 
-1. **Carica CSV**: Legge tutti i file CSV generati da seq e par
-2. **Parsing robusto**: Gestisce escaping virgolette e caratteri speciali
-3. **Confronto ngram-by-ngram**: Verifica frequenza per ogni chiave
-4. **Identifica discrepanze**: Trova n-gram mancanti o con frequenze diverse
-5. **Report dettagliato**: Mostra esempi di errori se presenti (modalità verbose)
+1. **Load CSV**: Reads all CSV files generated by seq and par
+2. **Robust parsing**: Handles quote escaping and special characters
+3. **Ngram-by-ngram comparison**: Verifies frequency for each key
+4. **Identify discrepancies**: Finds missing n-grams or different frequencies
+5. **Detailed report**: Shows error examples if present (verbose mode)
 
-**CSV Reader**: Parsing manuale ottimizzato per formato `"ngram",frequency`
+**CSV Reader**: Manual parsing optimized for `"ngram",frequency` format
 
 ---
 
-## 🔧 Ottimizzazioni Implementate
+## 🔧 Implemented Optimizations
 
-### Versione Parallela
+### Parallel Version
 
 #### 1. Thread-local Hash Maps
 ```cpp
-// Ogni thread ha mappe private
+// Each thread has private maps
 #pragma omp parallel
 {
     std::unordered_map<std::string, size_t> local_wb;
     std::unordered_map<std::string, size_t> local_wt;
     // ...
-    // No lock/contention durante processing
+    // No lock/contention during processing
 }
 ```
-**Beneficio**: Elimina contention su strutture condivise (critical section)
+**Benefit**: Eliminates contention on shared structures (critical section)
 
 #### 2. Dynamic Scheduling
 ```cpp
 #pragma omp parallel for schedule(dynamic, 1)
 for (size_t i = 0; i < files.size(); i++) {
-    // Distribuzione automatica
+    // Automatic distribution
 }
 ```
-**Beneficio**: Bilanciamento carico (libri hanno dimensioni diverse: 50KB - 5MB)
+**Benefit**: Load balancing (books have different sizes: 50KB - 5MB)
 
-#### 3. Merge Gerarchico Parallelizzato
+#### 3. Parallelized Hierarchical Merge
 ```cpp
 #pragma omp parallel for schedule(static)
 for (const auto& [key, val] : local_maps[i]) {
@@ -441,42 +441,42 @@ for (const auto& [key, val] : local_maps[i]) {
     global_map[key] += val;
 }
 ```
-**Beneficio**: Merge stesso parallelizzato (non bottleneck sequenziale)
+**Benefit**: Merge itself parallelized (not sequential bottleneck)
 
 #### 4. Memory Pre-allocation
 ```cpp
-// Stima dimensione finale
+// Estimate final size
 size_t estimated_size = total_files * 50000;
 global_map.reserve(estimated_size);
 ```
-**Beneficio**: Riduce rehashing durante merge (~15% più veloce)
+**Benefit**: Reduces rehashing during merge (~15% faster)
 
-#### 5. Lettura File Ottimizzata
+#### 5. Optimized File Reading
 ```cpp
-// Single read invece di getline loop
+// Single read instead of getline loop
 std::ifstream file(path, std::ios::binary | std::ios::ate);
 size_t size = file.tellg();
 file.seekg(0);
 std::string content(size, '\0');
 file.read(&content[0], size);
 ```
-**Beneficio**: ~30% più veloce di getline multipli
+**Benefit**: ~30% faster than multiple getlines
 
-### Entrambe le Versioni
+### Both Versions
 
-#### 1. Lookup Table per tolower()
+#### 1. Lookup Table for tolower()
 ```cpp
-// Array statico invece di std::tolower()
+// Static array instead of std::tolower()
 static const char TOLOWER[256] = {
     0, 1, 2, ..., 'a', 'b', 'c', ..., 'A'->'a', 'B'->'b', ...
 };
 char lower = TOLOWER[(unsigned char)c];
 ```
-**Beneficio**: ~2x più veloce (no function call overhead)
+**Benefit**: ~2x faster (no function call overhead)
 
 #### 2. UTF-8 Inline Processing
 ```cpp
-// Conversione accenti senza librerie
+// Accent conversion without libraries
 if ((unsigned char)str[i] == 0xC3) {
     switch ((unsigned char)str[i+1]) {
         case 0xA0: case 0xA1: result += 'a'; i++; break; // à,á
@@ -485,48 +485,48 @@ if ((unsigned char)str[i] == 0xC3) {
     }
 }
 ```
-**Beneficio**: No dipendenze esterne (ICU, iconv), ~3x più veloce
+**Benefit**: No external dependencies (ICU, iconv), ~3x faster
 
 #### 3. Reserve String Capacity
 ```cpp
-// Pre-allocazione basata su dimensione input
+// Pre-allocation based on input size
 size_t estimated_chars = total_size * 3 * 6;  
-// 3 parole max per trigram, 6 char/parola stimate
+// 3 words max per trigram, 6 char/word estimated
 result.reserve(estimated_chars);
 ```
-**Beneficio**: Evita riallocazioni multiple (~10% più veloce)
+**Benefit**: Avoids multiple reallocations (~10% faster)
 
-**Spiegazione stima**: 
-- Un trigram ha al massimo 3 parole
-- Lunghezza media parola inglese: ~5 caratteri
-- Margine di sicurezza: 6 char/parola
-- Separatori spazio: +2 caratteri
-- Formula: `num_trigrams × 3 × 6 = capacità stimata`
+**Estimate explanation**: 
+- A trigram has at most 3 words
+- Average English word length: ~5 characters
+- Safety margin: 6 char/word
+- Space separators: +2 characters
+- Formula: `num_trigrams × 3 × 6 = estimated capacity`
 
-#### 4. String Building Ottimizzato
+#### 4. Optimized String Building
 ```cpp
-// Append diretto invece di concatenazione multipla
+// Direct append instead of multiple concatenation
 std::string key;
-key.reserve(50);  // Trigram tipico < 50 char
+key.reserve(50);  // Typical trigram < 50 char
 key.append(word1).append(" ").append(word2).append(" ").append(word3);
 ```
-**Beneficio**: Evita allocazioni temporanee di `operator+`
+**Benefit**: Avoids temporary allocations from `operator+`
 
 ---
 
-## 📁 Struttura File Output
+## 📁 Output File Structure
 
-### Directory di Output
+### Output Directories
 
-#### Produzione
+#### Production
 ```
-output_sequential/          # Output versione sequenziale (dataset completo)
+output_sequential/          # Sequential version output (full dataset)
 ├── word_bigrams_seq.csv
 ├── word_trigrams_seq.csv
 ├── char_bigrams_seq.csv
 └── char_trigrams_seq.csv
 
-output_parallel/           # Output versione parallela (dataset completo)
+output_parallel/           # Parallel version output (full dataset)
 ├── word_bigrams_par.csv
 ├── word_trigrams_par.csv
 ├── char_bigrams_par.csv
@@ -536,12 +536,12 @@ output_parallel/           # Output versione parallela (dataset completo)
 #### Test (in `test/`)
 ```
 test/
-├── output_sequential/     # Test sequenziale su dataset ridotto
-├── output_parallel/       # Test parallelo su dataset ridotto
-└── output_hybrid/         # Test configurazioni ibride
+├── output_sequential/     # Sequential test on reduced dataset
+├── output_parallel/       # Parallel test on reduced dataset
+└── output_hybrid/         # Hybrid configuration tests
 ```
 
-### Formato CSV
+### CSV Format
 
 ```csv
 ngram,frequency
@@ -551,14 +551,14 @@ ngram,frequency
 ...
 ```
 
-**Caratteristiche**:
+**Features**:
 - Header: `ngram,frequency`
-- Ngram tra virgolette (gestisce spazi e caratteri speciali)
-- Escaping corretto per virgolette interne: `"he said ""hello"""` 
-- Ordinamento decrescente per frequenza
+- N-grams in quotes (handles spaces and special characters)
+- Proper escaping for internal quotes: `"he said ""hello"""` 
+- Descending order by frequency
 - Encoding: UTF-8
 
-**Dimensioni tipiche**:
+**Typical sizes**:
 - Word bigrams: ~150 MB
 - Word trigrams: ~450 MB
 - Char bigrams: ~15 KB
@@ -566,61 +566,61 @@ ngram,frequency
 
 ---
 
-## 🧪 Testing e Validazione
+## 🧪 Testing and Validation
 
-### Test Suite Disponibili
+### Available Test Suite
 
 #### 1. `test_correctness.cpp`
-Test rapido su dataset ridotto (`test_data/test_file.txt`)
+Quick test on reduced dataset (`test_data/test_file.txt`)
 
-**Uso**:
+**Usage**:
 ```bash
 ./test_correctness
 ```
 
-**Verifica**:
-- Correttezza algoritmi base
-- Gestione edge cases (stringhe vuote, caratteri speciali)
-- Output formato CSV corretto
+**Verifies**:
+- Basic algorithm correctness
+- Edge case handling (empty strings, special characters)
+- Correct CSV format output
 
 #### 2. `correctness_check.cpp`
-Verifica completa su dataset produzione
+Complete verification on production dataset
 
-**Uso**:
+**Usage**:
 ```bash
 ./correctness_check output_sequential output_parallel verbose
 ```
 
-**Verifica**:
-- Identità risultati seq vs par
-- Analisi statistica discrepanze
-- Report dettagliato con esempi
+**Verifies**:
+- Result identity seq vs par
+- Statistical analysis of discrepancies
+- Detailed report with examples
 
 #### 3. `par_SoA_AoS.cpp`
-Benchmark architetture dati
+Data architecture benchmark
 
-**Confronta**:
+**Compares**:
 - Structure of Arrays (cache-friendly)
 - Array of Structures (OOP-style)
 
-### Eseguire Tutti i Test
+### Running All Tests
 
 ```bash
 cd build
 
-# 1. Test rapido
+# 1. Quick test
 ./test_correctness
 
-# 2. Run completo seq
+# 2. Full seq run
 ./bigram_seq
 
-# 3. Run completo par
+# 3. Full par run
 ./bigram_par
 
-# 4. Verifica correttezza
+# 4. Correctness verification
 ./correctness_check
 
-# 5. Benchmark SoA/AoS
+# 5. SoA/AoS benchmark
 ./par_SoA_AoS
 ```
 
@@ -695,97 +695,97 @@ CHAPTER 1
 
 ---
 
-## 🚀 Sviluppi Futuri
+## 🚀 Future Developments
 
-### Features Pianificate
+### Planned Features
 
-- [ ] **N-gram variabili**: Supporto 4-gram, 5-gram, n-gram configurabile
-- [ ] **Analisi statistica**: TF-IDF, PMI (Pointwise Mutual Information), collocazioni
-- [ ] **Visualizzazione**: Dashboard interattiva con grafici n-gram più frequenti
-- [ ] **Export formati**: JSON, SQLite, Parquet per integrazione data science
-- [ ] **Filtraggio intelligente**: Rimozione stopwords configurabile
-- [ ] **Context window**: Analisi n-gram con finestra contestuale estesa
+- [ ] **Variable n-grams**: Support for 4-gram, 5-gram, configurable n-gram
+- [ ] **Statistical analysis**: TF-IDF, PMI (Pointwise Mutual Information), collocations
+- [ ] **Visualization**: Interactive dashboard with most frequent n-gram charts
+- [ ] **Export formats**: JSON, SQLite, Parquet for data science integration
+- [ ] **Intelligent filtering**: Configurable stopword removal
+- [ ] **Context window**: N-gram analysis with extended contextual window
 
-### Ottimizzazioni
+### Optimizations
 
-- [ ] **MPI parallelization**: Scaling multi-nodo per cluster HPC
-- [ ] **GPU acceleration**: CUDA/OpenCL per hash map parallele massive
-- [ ] **SIMD vectorization**: AVX2/NEON per tokenizzazione batch
-- [ ] **Compressione risultati**: Codifica efficiente per CSV giganti
-- [ ] **Memory streaming**: Processing chunk-by-chunk per dataset enormi
-- [ ] **Hash map ottimizzata**: Robin Hood hashing o Swiss Tables (Google)
+- [ ] **MPI parallelization**: Multi-node scaling for HPC clusters
+- [ ] **GPU acceleration**: CUDA/OpenCL for massive parallel hash maps
+- [ ] **SIMD vectorization**: AVX2/NEON for batch tokenization
+- [ ] **Result compression**: Efficient encoding for giant CSVs
+- [ ] **Memory streaming**: Chunk-by-chunk processing for huge datasets
+- [ ] **Optimized hash map**: Robin Hood hashing or Swiss Tables (Google)
 
-### Estensioni Linguistiche
+### Linguistic Extensions
 
-- [ ] **Multi-lingua**: Supporto completo Unicode (Cirillico, Arabo, Cinese, etc.)
-- [ ] **Lemmatization**: Riduzione a forme base (running → run)
-- [ ] **POS tagging**: Etichettatura Part-Of-Speech per n-gram sintattici
-- [ ] **Named Entity Recognition**: Identificazione nomi propri, luoghi, date
+- [ ] **Multi-language**: Full Unicode support (Cyrillic, Arabic, Chinese, etc.)
+- [ ] **Lemmatization**: Reduction to base forms (running → run)
+- [ ] **POS tagging**: Part-Of-Speech labeling for syntactic n-grams
+- [ ] **Named Entity Recognition**: Identification of proper nouns, places, dates
 
 ---
 
 ## 🐛 Troubleshooting
 
-### Errore: OpenMP non trovato (macOS)
+### Error: OpenMP not found (macOS)
 
 ```bash
-# Installa libomp con Homebrew
+# Install libomp with Homebrew
 brew install libomp
 
-# Riconfigura CMake
+# Reconfigure CMake
 cd build
 cmake .. -DOpenMP_ROOT=$(brew --prefix libomp)
 make -j4
 ```
 
-### Errore: File non trovati all'esecuzione
+### Error: Files not found at runtime
 
 ```bash
-# Assicurati di essere nella directory corretta
-cd build  # o cmake-build-debug
+# Make sure you're in the correct directory
+cd build  # or cmake-build-debug
 
-# Verifica che book_gutenberg/ sia accessibile
+# Verify that book_gutenberg/ is accessible
 ls ../book_gutenberg/
 
-# Esegui da directory build
+# Run from build directory
 ./bigram_seq
 ```
 
-### Performance basse su macOS
+### Poor performance on macOS
 
 ```bash
-# Imposta numero thread esplicito
+# Set explicit thread number
 export OMP_NUM_THREADS=8
 
-# Disabilita dynamic threads
+# Disable dynamic threads
 export OMP_DYNAMIC=FALSE
 
-# Binding threads a core fisici
+# Bind threads to physical cores
 export OMP_PROC_BIND=close
 
 ./bigram_par
 ```
 
-### Errore: Out of Memory
+### Error: Out of Memory
 
 ```bash
-# Riduci numero thread
+# Reduce number of threads
 export OMP_NUM_THREADS=4
 
-# Oppure processa subset di libri
-# (modifica hardcoded in bigram_par.cpp)
+# Or process subset of books
+# (hardcoded modification in bigram_par.cpp)
 ```
 
-### CSV malformati
+### Malformed CSV
 
 ```bash
-# Verifica encoding UTF-8
+# Verify UTF-8 encoding
 file output_sequential/word_bigrams_seq.csv
 
-# Controlla header
+# Check header
 head -n 5 output_sequential/word_bigrams_seq.csv
 
-# Se problemi, rigenera
+# If problems, regenerate
 rm -rf output_*
 ./bigram_seq
 ./bigram_par
@@ -793,15 +793,15 @@ rm -rf output_*
 
 ---
 
-## 📚 Riferimenti
+## 📚 References
 
-### Librerie e Standard Utilizzati
+### Used Libraries and Standards
 
 - **C++17**: `std::filesystem`, `std::string_view`
-- **OpenMP 4.5**: Parallelizzazione shared-memory
+- **OpenMP 4.5**: Shared-memory parallelization
 - **STL**: `unordered_map`, `vector`, `algorithm`
 
-### Paper e Risorse
+### Papers and Resources
 
 - [OpenMP Best Practices](https://www.openmp.org/wp-content/uploads/openmp-examples-4.5.0.pdf)
 - [Hash Table Performance](https://tessil.github.io/2016/08/29/benchmark-hopscotch-map.html)
@@ -810,17 +810,9 @@ rm -rf output_*
 
 ---
 
-## 📄 Licenza
+## 📄 License
 
-Questo progetto è stato sviluppato per scopi educativi e di ricerca.
+This project was developed for educational and research purposes.
 
-**Dataset**: I testi da Project Gutenberg sono di pubblico dominio.
-
----
-
-## 👤 Autore
-
-**Lorenzo Cappetti**  
-2025
-
+**Dataset**: Texts from Project Gutenberg are in the public domain.
 

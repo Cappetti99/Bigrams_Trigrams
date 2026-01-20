@@ -1,36 +1,17 @@
 import matplotlib.pyplot as plt
 import os
 
-# =========================================================
-# OBIETTIVO DELLO SCRIPT
-# ---------------------------------------------------------
-# Questo script prende dei tempi misurati (wall-time e cpu-time)
-# ottenuti eseguendo lo stesso programma con diversi numeri di thread,
-# calcola speedup ed efficienza, e poi salva una serie di grafici
-# dentro una cartella dedicata.
-# =========================================================
+# ============================
+# CREA CARTELLA DI OUTPUT
+# ============================
 
-
-# =========================================================
-# 1) CREA (SE SERVE) LA CARTELLA DI OUTPUT
-# ---------------------------------------------------------
-# Mettiamo i grafici in una cartella separata così non “sporchiamo”
-# la directory di lavoro.
-# exist_ok=True evita errori se la cartella esiste già.
-# =========================================================
 output_dir = "grafici_performance"
 os.makedirs(output_dir, exist_ok=True)
 
+# ============================
+# DATI RACCOLTI
+# ============================
 
-# =========================================================
-# 2) DATI RACCOLTI
-# ---------------------------------------------------------
-# threads: quanti thread sono stati usati in ogni prova.
-# wall_times: tempo reale di esecuzione (quello che “vede” l’utente,
-#             cioè il tempo trascorso da start a fine).
-# cpu_times: tempo CPU totale consumato (spesso cresce con i thread,
-#            perché somma il lavoro su più core + overhead).
-# =========================================================
 threads = [1, 2, 4, 8, 16, 32]
 
 wall_times = [
@@ -51,22 +32,82 @@ cpu_times = [
     64.749
 ]
 
-
-# =========================================================
-# 3) CALCOLI: BASELINE, SPEEDUP, EFFICIENZA
-# ---------------------------------------------------------
-# baseline: tempo di riferimento per calcolare lo speedup.
-# Di solito è il wall-time con 1 thread (o una media di più run).
-# Qui è molto vicino al primo wall_time (32.767), quindi ok.
-#
-# speedup = T1 / Tp  (quanto miglioro rispetto alla versione 1-thread)
-# efficiency = speedup / p  (quanto “bene” sto usando i thread)
-#
-# speedup_ideal: speedup perfetto lineare (p thread -> speedup p).
-# Nella realtà NON succede quasi mai: overhead, sezioni seriali,
-# contesa memoria, scheduling, ecc.
-# =========================================================
 baseline = 32.773
+speedup_calc = [baseline / t for t in wall_times]
+efficiency = [s / t for s, t in zip(speedup_calc, threads)]
+speedup_ideal = threads
 
-# Calcolo dello speedup reale: per ogni prova prendo baseline / wall_time
-speedup_calc = [baseline /
+# ============================
+# 1) SPEEDUP vs THREAD
+# ============================
+
+plt.figure(figsize=(8,5))
+plt.plot(threads, speedup_calc, marker='o')
+plt.xlabel("Numero di thread")
+plt.ylabel("Speedup (x)")
+plt.title("Speedup vs Numero di Thread")
+plt.grid(True)
+plt.xticks(threads)
+plt.savefig(f"{output_dir}/speedup_vs_thread.png", dpi=200)
+plt.close()
+
+# ============================
+# 2) EFFICIENZA DEL PARALLELISMO
+# ============================
+
+plt.figure(figsize=(8,5))
+plt.plot(threads, efficiency, marker='o')
+plt.xlabel("Numero di thread")
+plt.ylabel("Efficienza")
+plt.title("Efficienza vs Numero di Thread")
+plt.grid(True)
+plt.ylim(0,1)
+plt.xticks(threads)
+plt.savefig(f"{output_dir}/efficienza_vs_thread.png", dpi=200)
+plt.close()
+
+# ============================
+# 3) WALL-CLOCK TIME
+# ============================
+
+plt.figure(figsize=(8,5))
+plt.plot(threads, wall_times, marker='o')
+plt.xlabel("Numero di thread")
+plt.ylabel("Tempo (s)")
+plt.title("Wall-Clock Time vs Numero di Thread")
+plt.grid(True)
+plt.xticks(threads)
+plt.savefig(f"{output_dir}/wall_clock_time_vs_thread.png", dpi=200)
+plt.close()
+
+# ============================
+# 4) CPU TIME
+# ============================
+
+plt.figure(figsize=(8,5))
+plt.plot(threads, cpu_times, marker='o')
+plt.xlabel("Numero di thread")
+plt.ylabel("CPU Time (s)")
+plt.title("CPU Time vs Numero di Thread")
+plt.grid(True)
+plt.xticks(threads)
+plt.savefig(f"{output_dir}/cpu_time_vs_thread.png", dpi=200)
+plt.close()
+
+# ============================
+# 5) SPEEDUP IDEALE vs REALE
+# ============================
+
+plt.figure(figsize=(8,5))
+plt.plot(threads, speedup_calc, marker='o', label="Speedup reale")
+plt.plot(threads, speedup_ideal, marker='x', linestyle='--', label="Speedup ideale (lineare)")
+plt.xlabel("Numero di thread")
+plt.ylabel("Speedup (x)")
+plt.title("Speedup: reale vs ideale")
+plt.grid(True)
+plt.legend()
+plt.xticks(threads)
+plt.savefig(f"{output_dir}/speedup_reale_vs_ideale.png", dpi=200)
+plt.close()
+
+print(f"Tutti i grafici salvati in: {output_dir}/")

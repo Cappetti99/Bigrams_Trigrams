@@ -3,8 +3,6 @@
 //
 // Parallel N-gram Analysis - SoA (Structure of Arrays) Version
 // SoA layout: separate arrays for each field vs AoS (array of structs).
-// E.g., data[], sizes[], used[] instead of vector<{data, size, used}>.
-// Better cache when accessing one field, but more complex indexing.
 //
 
 #include <iostream>
@@ -100,7 +98,7 @@ public:
 
 //═══════════════════════════════════════════════════════════════
 // SHARDED HASH MAP - SoA VERSION
-// Separate vectors: mutexes[], maps[], arenas[] (vs struct with all three).
+// Separate vectors: mutexes[], maps[], arenas[].
 // Mutexes still cache-aligned to avoid false sharing.
 //═══════════════════════════════════════════════════════════════
 class ShardedMapSoA {
@@ -215,7 +213,7 @@ public:
 
 //═══════════════════════════════════════════════════════════════
 // TOKENIZER - SoA VERSION
-// Separate arrays: lower[256] and flags[256] (vs array of struct).
+// Separate arrays: lower[256] and flags[256].
 // Better cache when only checking flags or only converting to lowercase.
 //═══════════════════════════════════════════════════════════════
 class TokenizerSoA {
@@ -299,7 +297,7 @@ public:
                 }
             }
 
-            // Check flags first, only access lower if needed (better cache)
+            // Check flags first, only access lower if needed
             uint8_t flags = flags_table[c];
 
             if (flags & 8) continue;
@@ -581,7 +579,6 @@ public:
 //═══════════════════════════════════════════════════════════════
 // MAIN - SoA VERSION
 // Uses SoA throughout. Compare with parallel.cpp (AoS) for performance.
-// Expected: similar or better when accessing one field, worse for all fields.
 //═══════════════════════════════════════════════════════════════
 int main()
 {

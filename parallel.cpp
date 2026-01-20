@@ -171,7 +171,7 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// TEXT CLEANER (same as sequential version)
+// TEXT CLEANER 
 //═══════════════════════════════════════════════════════════════
 class TextCleaner {
 private:
@@ -221,7 +221,7 @@ public:
 };
 
 //═══════════════════════════════════════════════════════════════
-// TOKENIZER (same as sequential version)
+// TOKENIZER 
 //═══════════════════════════════════════════════════════════════
 class Tokenizer {
 private:
@@ -456,7 +456,6 @@ public:
     }
 
     // Main parallel entry point using OpenMP.
-    // Dynamic scheduling: better load balancing when books vary in size.
     static void process_parallel_sharded(
         const std::vector<std::string>& book_files,
         ShardedMap& word_bigrams,
@@ -481,7 +480,7 @@ public:
             words_buf.reserve(WORD_BUFFER_SIZE);
             chars_buf.reserve(CHAR_BUFFER_SIZE);
 
-            // Dynamic scheduling: threads grab next book when done (vs static chunks)
+            // Dynamic scheduling: threads grab next book when done 
             // Better for uneven book sizes
             #pragma omp for schedule(dynamic)
             for (int i = 0; i < total_books; ++i) {

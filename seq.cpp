@@ -65,7 +65,7 @@ public:
         size_t start_pos = 0;
         size_t end_pos = text.size();
 
-        // Cerca START marker con memmem (più veloce di find)
+        // Search for START marker with memmem (faster than find)
         const char* found = static_cast<const char*>(
             memmem(text.data(), text.size(), START_MARKER.data(), START_MARKER.size())
         );
@@ -82,7 +82,7 @@ public:
             }
         }
 
-        // Cerca END marker
+        // Search for END marker
         if (start_pos < text.size()) {
             const char* end_found = static_cast<const char*>(
                 memmem(text.data() + start_pos,
@@ -95,7 +95,7 @@ public:
             }
         }
 
-        // Erase in-place (una sola operazione)
+        // Erase in-place (single operation)
         if (start_pos > 0 || end_pos < text.size()) {
             if (start_pos > 0) {
                 memmove(text.data(), text.data() + start_pos, end_pos - start_pos);
@@ -172,8 +172,8 @@ public:
     // Two-pointer approach (read/write) avoids allocations, resize only at the end.
     static void normalize_inplace(std::string& text, bool remove_punct = false) {
         const CharInfo* table = get_char_table();
-        char* write = &text[0];  // Puntatore scrittura
-        const char* read = text.data();  // Puntatore lettura
+        char* write = &text[0];  // Write pointer
+        const char* read = text.data();  // Read pointer
         const size_t size = text.size();
 
         for (size_t i = 0; i < size; ++i) {
@@ -251,9 +251,9 @@ public:
 //═══════════════════════════════════════════════════════════════
 class OptimizedStringPool {
 private:
-    std::vector<char> arena;  // Buffer unico per tutte le stringhe
-    std::vector<std::string_view> id_to_word;  // ID → parola (lookup veloce)
-    std::unordered_map<std::string_view, size_t> word_to_id;  // parola → ID (deduplicazione)
+    std::vector<char> arena;  // Single buffer for all strings
+    std::vector<std::string_view> id_to_word;  // ID → word (fast lookup)
+    std::unordered_map<std::string_view, size_t> word_to_id;  // word → ID (deduplication)
 
 public:
     OptimizedStringPool() {
@@ -292,9 +292,9 @@ public:
 // Cache-aligned (32B) with explicit padding to prevent false sharing.
 //═══════════════════════════════════════════════════════════════
 struct alignas(32) NgramID {
-    size_t word_ids[3];  // Fino a 3 parole (trigram)
-    uint8_t length;      // Numero effettivo di parole (2 o 3)
-    uint8_t padding[7];  // Padding per allineamento a 32 byte
+    size_t word_ids[3];  // Up to 3 words (trigram)
+    uint8_t length;      // Actual number of words (2 or 3)
+    uint8_t padding[7];  // Padding for 32-byte alignment
 
     inline bool operator==(const NgramID& other) const noexcept {
         return length == other.length &&
@@ -340,7 +340,7 @@ public:
 
         ngram_ids.clear();
         frequencies.clear();
-        ngram_ids.reserve(total_size);  // Pre-allocazione per evitare resize
+        ngram_ids.reserve(total_size);  // Pre-allocation to avoid resize
         frequencies.reserve(total_size);
 
         for (const auto& [ngram_str, freq] : aos_map) {
@@ -380,7 +380,7 @@ public:
 
         size_t k = std::min(n, indices.size());
 
-        std::partial_sort(  // Ordina solo i primi k elementi
+        std::partial_sort(  // Sort only the first k elements
             indices.begin(),
             indices.begin() + k,
             indices.end(),
@@ -582,9 +582,9 @@ public:
     ) {
         int total_books = book_files.size();
 
-        // Hash map per fase di accumulo (AoS)
+        // Hash map for accumulation phase (AoS)
         std::unordered_map<std::string, size_t> wb, wt, cb, ct;
-        wb.reserve(WB_RESERVE);  // Pre-allocazione per evitare rehash
+        wb.reserve(WB_RESERVE);  // Pre-allocation to avoid rehash
         wt.reserve(WT_RESERVE);
         cb.reserve(CB_RESERVE);
         ct.reserve(CT_RESERVE);

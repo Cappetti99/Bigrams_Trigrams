@@ -26,7 +26,7 @@ public:
         std::ifstream file(filename);
 
         if (!file) {
-            std::cerr << "❌ File non trovato: " << filename << "\n";
+            std::cerr << "❌ File not found: " << filename << "\n";
             return result;
         }
 
@@ -54,7 +54,7 @@ public:
                     size_t frequency = std::stoull(freq_str);
                     result[ngram] = frequency;
                 } catch (...) {
-                    std::cerr << "⚠️  Errore parsing linea: " << line << "\n";
+                    std::cerr << "⚠️  Parsing error on line: " << line << "\n";
                 }
             }
         }
@@ -156,24 +156,24 @@ private:
 
         // If verbose mode and errors found, show examples for debugging
         if (verbose && !result.is_correct) {
-            std::cout << "\n  📊 Dettagli per " << name << ":\n";
+            std::cout << "\n  📊 Details for " << name << ":\n";
 
             if (!mismatch_examples.empty()) {
-                std::cout << "  ⚠️  Esempi di frequency mismatch:\n";
+                std::cout << "  ⚠️  Frequency mismatch examples:\n";
                 for (const auto& ex : mismatch_examples) {
                     std::cout << "     - " << ex << "\n";
                 }
             }
 
             if (!seq_only_examples.empty()) {
-                std::cout << "  ⚠️  Esempi presenti solo in seq:\n";
+                std::cout << "  ⚠️  Examples only in seq:\n";
                 for (const auto& ex : seq_only_examples) {
                     std::cout << "     - " << ex << "\n";
                 }
             }
 
             if (!par_only_examples.empty()) {
-                std::cout << "  ⚠️  Esempi presenti solo in par:\n";
+                std::cout << "  ⚠️  Examples only in par:\n";
                 for (const auto& ex : par_only_examples) {
                     std::cout << "     - " << ex << "\n";
                 }
@@ -183,8 +183,10 @@ private:
         return result;
     }
 
-public:    // Main verification: load both output directories, compare all 4 n-gram types
-    // Fails if ANY difference found (strict equality required)    static void check_correctness(
+public:
+    // Main verification: load both output directories, compare all 4 n-gram types
+    // Fails if ANY difference found (strict equality required)
+    static void check_correctness(
         const std::string& seq_dir = "test/output_sequential",
         const std::string& par_dir = "test/output_hybrid",
         bool verbose = true
@@ -192,16 +194,16 @@ public:    // Main verification: load both output directories, compare all 4 n-g
         std::cout << "\n";
         std::cout << "\n";
         std::cout << "CORRECTNESS CHECK ANALYZER\n";
-        std::cout << "Confronto SEQ vs PARALLEL\n";
+        std::cout << "SEQ vs PARALLEL Comparison\n";
         std::cout << "=========================\n\n";
 
-        // Verifica che entrambe le directory esistano
+        // Verify that both directories exist
         if (!fs::exists(seq_dir)) {
-            std::cerr << "❌ Directory '" << seq_dir << "' non trovata!\n";
+            std::cerr << "❌ Directory '" << seq_dir << "' not found!\n";
             return;
         }
         if (!fs::exists(par_dir)) {
-            std::cerr << "❌ Directory '" << par_dir << "' non trovata!\n";
+            std::cerr << "❌ Directory '" << par_dir << "' not found!\n";
             return;
         }
 
@@ -209,7 +211,7 @@ public:    // Main verification: load both output directories, compare all 4 n-g
         std::cout << "Parallel output:   " << par_dir << "/\n\n";
 
         // Load all 4 n-gram types from both directories (8 files total)
-        std::cout << "Caricamento files CSV...\n\n";
+        std::cout << "Loading CSV files...\n\n";
 
         auto seq_wb = CSVReader::read_csv(seq_dir + "/word_bigrams.csv");
         auto par_wb = CSVReader::read_csv(par_dir + "/word_bigrams.csv");
@@ -226,7 +228,7 @@ public:    // Main verification: load both output directories, compare all 4 n-g
         // Run 4 comparisons (verbose=true shows error examples if found)
         std::vector<ComparisonResult> results;
 
-        std::cout << "Analisi in corso...\n\n";
+        std::cout << "Analysis in progress...\n\n";
 
         results.push_back(compare_maps(seq_wb, par_wb, "Word Bigrams", verbose));
         results.push_back(compare_maps(seq_wt, par_wt, "Word Trigrams", verbose));
@@ -234,7 +236,7 @@ public:    // Main verification: load both output directories, compare all 4 n-g
         results.push_back(compare_maps(seq_ct, par_ct, "Char Trigrams", verbose));
 
         // Print formatted comparison table for each n-gram type
-        std::cout << "                  CONFRONTO DEI RISULTATI                  \n";
+        std::cout << "                  RESULTS COMPARISON                  \n";
 
         bool all_correct = true;
 
@@ -243,12 +245,12 @@ public:    // Main verification: load both output directories, compare all 4 n-g
             std::cout << "| " << std::left << std::setw(51) << res.name << " |\n";
             std::cout << "-----------------------------------------------------\n";
 
-            // Statistiche base
+            // Basic statistics
             std::cout << "| Unique (seq/par): " << std::right << std::setw(10) << res.seq_unique << " / " << std::setw(10) << res.par_unique << " |\n";
             std::cout << "| Total  (seq/par): " << std::right << std::setw(10) << res.seq_total << " / " << std::setw(10) << res.par_total << " |\n";
             std::cout << "-----------------------------------------------------\n";
 
-            // Confronto
+            // Comparison
             std::cout << "| Matches:          " << std::right << std::setw(27) << res.matches << " |\n";
             std::cout << "| Mismatches:       " << std::right << std::setw(27) << res.freq_mismatches << " |\n";
             std::cout << "| Only in seq/par:  " << std::right << std::setw(10) << res.only_in_seq << " / " << std::setw(10) << res.only_in_par << " |\n";
@@ -273,10 +275,10 @@ public:    // Main verification: load both output directories, compare all 4 n-g
         // Final verdict: parallel must match sequential 100% to pass
         if (all_correct) {
             std::cout << "[SUCCESS] CORRECTNESS CHECK PASSED\n";
-            std::cout << "La versione parallela produce risultati IDENTICI alla versione sequenziale!\n";
+            std::cout << "The parallel version produces IDENTICAL results to the sequential version!\n";
         } else {
             std::cout << "[FAILED] CORRECTNESS CHECK FAILED\n";
-            std::cout << "Trovate DIFFERENZE tra seq e parallel!\n";
+            std::cout << "DIFFERENCES found between seq and parallel!\n";
         }
         std::cout << "\n";
 
@@ -289,14 +291,14 @@ public:    // Main verification: load both output directories, compare all 4 n-g
             total_errors += res.freq_mismatches + res.only_in_seq + res.only_in_par;
         }
 
-        std::cout << " Statistiche complessive:\n";
-        std::cout << "   • Ngrams totali verificati: " << (total_matches + total_errors) << "\n";
-        std::cout << "   • Matches perfetti:         " << total_matches << "\n";
-        std::cout << "   • Errori totali:            " << total_errors << "\n";
+        std::cout << " Overall statistics:\n";
+        std::cout << "   • Total ngrams verified: " << (total_matches + total_errors) << "\n";
+        std::cout << "   • Perfect matches:       " << total_matches << "\n";
+        std::cout << "   • Total errors:          " << total_errors << "\n";
 
         if (total_matches + total_errors > 0) {
             double overall_accuracy = (double)total_matches / (total_matches + total_errors) * 100.0;
-            std::cout << "   • Accuracy complessiva:     " << std::fixed << std::setprecision(4)
+            std::cout << "   • Overall accuracy:      " << std::fixed << std::setprecision(4)
                       << overall_accuracy << "%\n";
         }
 
@@ -310,7 +312,7 @@ int main(int argc, char* argv[]) {
     std::string par_dir = "test/output_hybrid";
     bool verbose = true;
 
-    // Opzionale: parsing argomenti da linea di comando
+    // Optional: parse command line arguments
     if (argc >= 3) {
         seq_dir = argv[1];
         par_dir = argv[2];
