@@ -67,6 +67,40 @@ The corpus consists of nearly **1500 digital books** from [Project Gutenberg](ht
 - **Format**: Plain text (`.txt`) files with standardized encoding
 - **Acquisition**: Automated download script (`downloadBook.py`) ensures reproducible corpus building
 
+### Dataset Setup
+
+⚠️ **Important**: The `book_gutenberg/` directory is **NOT included in the git repository** due to its large size (~600 MB).
+
+**Option 1 - Automated Download (Recommended)**:
+
+Use the provided Python script to download ~1500 books from Project Gutenberg:
+
+```bash
+python3 tools/downloadBook.py
+```
+
+**Features**:
+- Downloads 1500 books automatically (50 classics + 1450 sequential IDs)
+- Skips already downloaded books (resumes interrupted downloads)
+- Tries multiple mirrors and formats for reliability
+- Respects server load with configurable pauses (1 second between downloads)
+- Estimated time: ~25 minutes for full corpus (if not cached)
+- Books saved in `book_gutenberg/libro_<ID>.txt` format
+
+**Option 2 - Manual download**:
+1. Create the `book_gutenberg/` directory:
+   ```bash
+   mkdir -p book_gutenberg
+   ```
+2. Download books from [Project Gutenberg](https://www.gutenberg.org/) in `.txt` format
+3. Name files as `libro_1.txt`, `libro_2.txt`, etc., or update the path in source code
+4. Find book IDs at: `https://www.gutenberg.org/ebooks/<ID>`
+
+**Option 3 - Use your own corpus**:
+- Place any collection of `.txt` files in a directory
+- Update the `folder_path` variable in the source files (`seq.cpp`, `parallel.cpp`, `parallel_soa.cpp`)
+- No specific naming convention required if you modify the code
+
 ---
 
 ## Project Structure
@@ -84,31 +118,46 @@ Bigrams_Trigrams/
 ├── analyze_results.py          # Results parser and plot generator
 ├── plot_results.py             # Plotting utilities
 ├── README.md                   # This documentation
+├── .gitignore                  # Git ignore rules
 │
-├── book_gutenberg/             # Dataset: ~1500 Project Gutenberg books
-│   ├── libro_1.txt
+├── book_gutenberg/             # Dataset: ~1500 Project Gutenberg books (NOT in git)
+│   ├── libro_1.txt             # Download separately or use downloadBook.py
 │   ├── libro_10.txt
 │   └── ...
 │
 ├── test_data/                  # Small dataset for testing/validation
 │   └── test_file.txt
 │
-├── results/                    # Output directory (generated at runtime)
-│   ├── sequential/             # Sequential version outputs
+├── results/                    # Output directory (generated at runtime, NOT in git)
+│   ├── sequential/             # Sequential version outputs (*.csv files)
 │   ├── parallel/               # Parallel (AoS) outputs
 │   └── parallel_soa/           # Parallel (SoA) outputs
 │
-├── build/                      # CMake build directory (generated)
+├── build/                      # CMake build directory (generated, NOT in git)
 │   ├── seq                     # Sequential executable
 │   ├── parallel                # Parallel (AoS) executable
 │   ├── parallel_soa            # Parallel (SoA) executable
 │   └── test_correctness        # Test executable
 │
+├── cmake-build-debug/          # CLion build directory (generated, NOT in git)
 ├── charts/                     # Performance charts and plots
 ├── grafici_analisi/            # Additional analysis graphs
 ├── doc/                        # Documentation and reports
 └── tools/                      # Utility scripts
 ```
+
+### Important Notes on Repository Structure
+
+⚠️ **The following directories are NOT included in the git repository** (see `.gitignore`):
+- **`book_gutenberg/`**: Dataset must be downloaded separately (see [Dataset Setup](#dataset-setup))
+- **`build/`**, **`cmake-build-*/`**: Generated during compilation
+- **`results/`**: Created at runtime, contains CSV outputs (ignored to avoid large files in repo)
+- **`*.csv`** files: All CSV outputs are gitignored
+
+After cloning the repository, you need to:
+1. Download or prepare the dataset in `book_gutenberg/`
+2. Build the project to generate executables
+3. Run the programs to generate `results/` output
 
 ### Key Files
 
@@ -260,12 +309,14 @@ cd build
 ./seq
 ```
 
-**Output**: Results written to `results/sequential/`
+**Output**: Results written to `results/sequential/` (directory created automatically)
 - `word_bigrams.csv`
 - `word_trigrams.csv`
 - `char_bigrams.csv`
 - `char_trigrams.csv`
 - Performance statistics file
+
+> **Note**: All CSV files and `results/` directory are gitignored. Output files are generated locally on each run.
 
 ### 2. Parallel (AoS)
 
@@ -283,7 +334,9 @@ Or provide via stdin:
 echo 8 | ./parallel
 ```
 
-**Output**: Results written to `results/parallel/`
+**Output**: Results written to `results/parallel/` (directory created automatically)
+
+> **Note**: CSV outputs are not tracked by git (see `.gitignore`)
 
 ### 3. Parallel (SoA)
 
@@ -296,7 +349,7 @@ Similarly prompts for thread count:
 echo 12 | ./parallel_soa
 ```
 
-**Output**: Results written to `results/parallel_soa/`
+**Output**: Results written to `results/parallel_soa/` (directory created automatically)
 
 ### 4. Automated Benchmarking
 
