@@ -822,15 +822,6 @@ This project is primarily for educational and research purposes. For questions, 
 - Alternative parallelization strategies
 - Cross-platform compatibility improvements
 - Additional analysis metrics
-
----
-
-## Acknowledgments
-
-- **Project Gutenberg** for providing the extensive public-domain textual corpus
-- **OpenMP Architecture Review Board** for the parallelization framework
-- **University of Florence** for computational resources and academic support
-
 ---
 
 **Last Updated**: January 2026
